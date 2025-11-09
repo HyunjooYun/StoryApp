@@ -246,13 +246,11 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                             _buildControlButton(
                               '다음\nNext',
                               Icons.skip_next,
-                              _currentPage < _pages.length - 1,
+                              _currentPage < _pages.length - 1 && !_isPlaying,
                               () async {
-                                if (_currentPage < _pages.length - 1) {
-                                  await _audioPlayerService.stop();
+                                if (_currentPage < _pages.length - 1 && !_isPlaying) {
                                   setState(() {
                                     _currentPage++;
-                                    _isPlaying = false;
                                   });
                                 }
                               },
@@ -344,19 +342,9 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   }
   
   void _onAudioComplete() {
-    if (_currentPage < _pages.length - 1) {
-      setState(() {
-        _currentPage++;
-      });
-      if (_isPlaying) {
-        _startPlaying(Provider.of<StoryProvider>(context, listen: false));
-      }
-    } else {
-      setState(() {
-        _isPlaying = false;
-        _currentPage = 0;
-      });
-    }
+    setState(() {
+      _isPlaying = false;
+    });
   }
 
   Future<void> _startPlaying(StoryProvider provider) async {

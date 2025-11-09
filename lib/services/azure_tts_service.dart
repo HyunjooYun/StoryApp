@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:path_provider/path_provider.dart';
+import '../models/voice_config.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 class AzureTTSService {
   static final AzureTTSService _instance = AzureTTSService._internal();
@@ -13,7 +15,9 @@ class AzureTTSService {
   late final String _region;
   late final String _endpoint;
 
-  void initialize() {
+  VoiceConfig? _voiceConfig;
+
+  Future<void> initialize() async {
     _apiKey = dotenv.env['AZURE_TTS_KEY'] ?? '';
     _region = dotenv.env['AZURE_TTS_REGION'] ?? 'koreacentral';
     _endpoint = dotenv.env['AZURE_TTS_ENDPOINT'] ??
@@ -21,53 +25,98 @@ class AzureTTSService {
     if (_apiKey.isEmpty) {
       throw Exception('AZURE_TTS_KEY not found in .env file');
     }
+    // voice_config.json 로드
+    _voiceConfig = await VoiceConfigLoader.loadFromAsset();
   }
 
-  /// Generate audio file from text using Azure TTS
+  /// 특수문자 이스케이프
+  String _xmlEscape(String input) => input
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&apos;');
+
+  /// voiceName에서 언어코드 추출 (예: "ko-KR-SeoHyeonNeural" -> "ko-KR")
+  String _langFromVoice(String voiceName) {
+    final i = voiceName.indexOf('-');
+    if (i > 0) {
+      final j = voiceName.indexOf('-', i + 1);
+      if (j > 0) return voiceName.substring(0, j);
+    }
+    // 실패 시 한국어 기본
+    return 'ko-KR';
+  }
+
   Future<String> generateAudio({
     required String text,
     required String language,
     String? characterGender,
-    double speed = 1.0,
-    double pitch = 1.0,
+    double? speed,
+    double? pitch,
+    int? age,
   }) async {
     try {
-      // Select voice based on language and gender
+      // voice_config에서 값 가져오기
+      String finalRate = '1.0';
+      String finalPitch = '0%';
+      if (_voiceConfig != null) {
+        final langConfig = _voiceConfig!.languages[language] ?? _voiceConfig!.languages['한국어'];
+        AgeRule? rule;
+        if (langConfig != null && age != null) {
+          rule = langConfig.getAgeRule(age);
+        }
+        finalRate = rule?.rate ?? _voiceConfig!.defaultConfig.rate;
+        finalPitch = rule?.pitch ?? _voiceConfig!.defaultConfig.pitch;
+      }
+      // 파라미터 우선순위: 직접 전달 > config
+      final usedRate = speed != null ? speed.toString() : finalRate;
+      final usedPitch = pitch != null ? pitch.toString() : finalPitch;
       final voiceName = _getVoiceName(language, characterGender);
-      // 로그: voiceName, text, speed, pitch
       print('AzureTTS generateAudio params:');
       print('  voiceName: $voiceName');
       print('  text: $text');
-      print('  speed: $speed');
-      print('  pitch: $pitch');
-
-      // Create SSML
-      final ssml = _createSSML(text, voiceName, speed, pitch);
+  print('  rate: $usedRate');
+  print('  pitch: $usedPitch');
+  final ssml = _createSSML_raw(text, voiceName, usedRate, usedPitch);
       print('AzureTTS SSML: $ssml');
-
-      // Call Azure TTS API
-      final response = await http.post(
-        Uri.parse(_endpoint),
-        headers: {
-          'Ocp-Apim-Subscription-Key': _apiKey,
+      final uri = Uri.parse(_endpoint);
+      final req = http.Request('POST', uri)
+        ..headers.addAll({
           'Content-Type': 'application/ssml+xml',
-          'X-Microsoft-OutputFormat': 'riff-16khz-16bit-mono-pcm',
+          'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+          'Ocp-Apim-Subscription-Key': _apiKey,
+          'Ocp-Apim-Subscription-Region': _region,
+          'Accept': '*/*',
           'User-Agent': 'StoryApp',
-        },
-        body: utf8.encode(ssml),
-      );
-
-      if (response.statusCode == 200) {
-        print('Azure TTS status: [32m${response.statusCode}[0m');
-        print('Azure TTS bodyBytes length: ${response.bodyBytes.length}');
-        print('Azure TTS body (as text): ${utf8.decode(response.bodyBytes, allowMalformed: true)}');
-        // Save audio file
-        final audioPath = await _saveAudioFile(response.bodyBytes);
-        return audioPath;
-      } else {
-        print('Azure TTS Error: [31m${response.statusCode}[0m - ${response.body}');
-        throw Exception('Azure TTS Error: ${response.statusCode} - ${response.body}');
+        })
+        ..body = ssml;
+      final streamed = await http.Client().send(req);
+      print('Azure TTS status: \x1B[32m[32m[0m${streamed.statusCode}\x1B[0m');
+      if (streamed.statusCode != 200) {
+        final errText = await streamed.stream.bytesToString();
+        print('Azure TTS Error Body: $errText');
+        throw Exception('Azure TTS Error: ${streamed.statusCode} - $errText');
       }
+      final bytes = await streamed.stream.toBytes();
+      print('Azure TTS received bytes: ${bytes.length}');
+      if (bytes.isEmpty) {
+        throw Exception('Azure TTS returned empty audio bytes');
+      }
+      final dir = await getApplicationDocumentsDirectory();
+      final audioDir = Directory('${dir.path}/audio');
+      if (!await audioDir.exists()) {
+        await audioDir.create(recursive: true);
+      }
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filePath = '${audioDir.path}/tts_$timestamp.mp3';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+      final len = await file.length();
+      if (len == 0) {
+        throw Exception('Saved audio is empty');
+      }
+      return filePath;
     } catch (e) {
       throw Exception('Failed to generate audio: $e');
     }
@@ -92,22 +141,22 @@ class AzureTTSService {
       case 'spanish':
       case '스페인어':
         return isFemale ? 'es-ES-ElviraNeural' : 'es-ES-AlvaroNeural';
+      case 'german':
+      case '독일어':
+        return isFemale ? 'de-DE-GiselaNeural' : 'de-DE-ConradNeural';
       default:
         return 'ko-KR-SunHiNeural'; // Default to Korean female
     }
   }
 
   /// Create SSML for Azure TTS
-  String _createSSML(String text, String voiceName, double speed, double pitch) {
-    // Convert speed (0.5 - 2.0) to percentage (-50% to +100%)
-    final speedPercent = ((speed - 1.0) * 100).toStringAsFixed(0);
-    final speedStr = speedPercent.startsWith('-') ? speedPercent : '+$speedPercent';
-    // Convert pitch to semitones (-50% to +50%)
-    final pitchPercent = ((pitch - 1.0) * 50).toStringAsFixed(0);
-    final pitchStr = pitchPercent.startsWith('-') ? pitchPercent : '+$pitchPercent';
-    return '''<speak version='1.0' xml:lang='ko-KR'>
+  String _createSSML_raw(
+      String text, String voiceName, String rate, String pitch) {
+    final safeText = _xmlEscape(text);
+    final lang = _langFromVoice(voiceName);
+    return '''<speak version='1.0' xml:lang='$lang'>
   <voice name='$voiceName'>
-    <prosody rate='${speedStr}%' pitch='${pitchStr}%'>
+    <prosody rate='$rate' pitch='$pitch'>
       $text
     </prosody>
   </voice>
@@ -122,11 +171,11 @@ class AzureTTSService {
       if (!await audioDir.exists()) {
         await audioDir.create(recursive: true);
       }
-  final timestamp = DateTime.now().millisecondsSinceEpoch;
-  final filePath = '${audioDir.path}/tts_$timestamp.wav';
-  final file = File(filePath);
-  await file.writeAsBytes(audioBytes);
-  return filePath;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filePath = '${audioDir.path}/tts_$timestamp.mp3';
+      final file = File(filePath);
+      await file.writeAsBytes(audioBytes);
+      return filePath;
     } catch (e) {
       throw Exception('Failed to save audio file: $e');
     }

@@ -14,15 +14,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late String _selectedLanguage;
   late int _selectedAge;
   late String _selectedGender;
-  late double _speechRate;
   late double _volume;
   
   final List<Map<String, String>> _languages = [
     {'code': '한국어', 'label': '한국어 Korean'},
-    {'code': '영어', 'label': '영어 English'},
     {'code': '일본어', 'label': '일본어 日本語'},
-    {'code': '베트남어', 'label': '베트남어 Tiếng Việt'},
     {'code': '중국어', 'label': '중국어 中文'},
+    {'code': '베트남어', 'label': '베트남어 Tiếng Việt'},
+    {'code': '영어', 'label': '영어 English'},
+    {'code': '독일어', 'label': '독일어 Deutsch'},
   ];
   
   @override
@@ -32,8 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _selectedLanguage = provider.settings.language;
     _selectedAge = provider.settings.age;
     _selectedGender = provider.settings.gender;
-    _speechRate = provider.settings.speechRate;
-    _volume = provider.settings.volume;
+  _volume = provider.settings.volume;
   }
 
   @override
@@ -185,16 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             _volume,
                             (value) => setState(() => _volume = value),
                           ),
-                          
-                          const SizedBox(height: 20),
-                          
-                          // Speed slider
-                          _buildSlider(
-                            '소리 빠르기 Sound Rate',
-                            _speechRate,
-                            (value) => setState(() => _speechRate = value),
-                          ),
-                          
+
                           const SizedBox(height: 30),
                           
                           // Action buttons
@@ -236,33 +226,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
   
   Widget _buildLanguageGrid() {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: _languages.map((lang) {
-        final isSelected = _selectedLanguage == lang['code'];
-        return SizedBox(
-          width: (MediaQuery.of(context).size.width - 104) / 2.2,
-          height: 60,
-          child: ElevatedButton(
-            onPressed: () => setState(() => _selectedLanguage = lang['code']!),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isSelected ? const Color(0xFF5E35B1) : const Color(0xFF8E6BB8),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+    // 2개씩 3행으로 배치
+    final rows = [
+      [_languages[0], _languages[1]], // 한국어, 일본어
+      [_languages[2], _languages[3]], // 중국어, 베트남어
+      [_languages[4], _languages[5]], // 영어, 독일어
+    ];
+    return Column(
+      children: rows.map((row) {
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: row.map((lang) {
+            final isSelected = _selectedLanguage == lang['code'];
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: SizedBox(
+                width: (MediaQuery.of(context).size.width - 104) / 2.2,
+                height: 60,
+                child: ElevatedButton(
+                  onPressed: () => setState(() => _selectedLanguage = lang['code']!),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isSelected ? const Color(0xFF5E35B1) : const Color(0xFF8E6BB8),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: isSelected ? 6 : 2,
+                  ),
+                  child: Text(
+                    lang['label']!,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               ),
-              elevation: isSelected ? 6 : 2,
-            ),
-            child: Text(
-              lang['label']!,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
+            );
+          }).toList(),
         );
       }).toList(),
     );
@@ -391,10 +393,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       language: _selectedLanguage,
       age: _selectedAge,
       gender: _selectedGender,
-      speechRate: _speechRate,
       volume: _volume,
     );
-    
     Provider.of<StoryProvider>(context, listen: false).updateSettings(newSettings);
     Navigator.pop(context);
   }

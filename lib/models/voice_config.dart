@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:flutter/services.dart' show rootBundle;
+
 class VoiceConfig {
   final String version;
   final DefaultConfig defaultConfig;
@@ -128,5 +131,13 @@ class FlutterTtsConfig {
       pitch: (json['pitch'] as num).toDouble(),
       pauseMs: json['pauseMs'],
     );
+  }
+}
+
+extension VoiceConfigLoader on VoiceConfig {
+  static Future<VoiceConfig> loadFromAsset() async {
+    final jsonStr = await rootBundle.loadString('assets/voice_config.json');
+    final jsonData = json.decode(jsonStr);
+    return VoiceConfig.fromJson(jsonData);
   }
 }

@@ -6,11 +6,11 @@ Future<void> main() async {
   final tts = AzureTTSService();
   tts.initialize();
 
-  final text = '안녕하세요. 이것은 Azure TTS 테스트입니다.';
-  final language = 'korean';
-  final gender = 'female';
-  final speed = 1.0;
-  final pitch = 1.0;
+  const text = '안녕하세요. 이것은 Azure TTS 테스트입니다.';
+  const language = 'korean';
+  const gender = 'female';
+  const speed = 1.0;
+  const pitch = 1.0;
 
   try {
     final filePath = await tts.generateAudio(

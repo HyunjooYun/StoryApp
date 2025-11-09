@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import '../models/story.dart';
 
@@ -6,12 +5,12 @@ class StoryService {
   static final StoryService _instance = StoryService._internal();
   factory StoryService() => _instance;
   StoryService._internal();
-  
+
   final List<Story> _stories = [];
-  
+
   Future<void> loadStories() async {
     if (_stories.isNotEmpty) return;
-    
+
     // Load predefined stories from assets
     _stories.addAll([
       Story(
@@ -37,11 +36,11 @@ class StoryService {
       ),
     ]);
   }
-  
+
   List<Story> getAllStories() {
     return List.unmodifiable(_stories);
   }
-  
+
   Story? getStoryById(String id) {
     try {
       return _stories.firstWhere((story) => story.id == id);
@@ -49,7 +48,7 @@ class StoryService {
       return null;
     }
   }
-  
+
   Future<String> getStoryContent(String storyId) async {
     final story = getStoryById(storyId);
     return story?.content ?? '';

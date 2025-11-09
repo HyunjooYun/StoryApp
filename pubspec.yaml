@@ -67,3 +67,7 @@ flutter_launcher_icons:
   image_path: "assets/images/app_icon.png"
   adaptive_icon_background: "#7C4DFF"
   adaptive_icon_foreground: "assets/images/app_icon.png"
+
+tts:
+  speed: 0.8   # 0.5 ~ 2.0 (기본값 1.0)
+  pitch: 1.1   # 0.5 ~ 2.0 (기본값 1.0)

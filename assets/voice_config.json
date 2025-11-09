@@ -128,6 +128,19 @@
           "flutterTts": { "rate": 0.6, "pitch": 1.0 }
         }
       ]
+    },
+    "독일어": {
+      "xmlLang": "de-DE",
+      "ageRules": [
+        {
+          "max": 200,
+          "rate": "1.0",
+          "pitch": "0%",
+          "style": "general",
+          "model": { "male": "de-DE-ConradNeural", "female": "de-DE-GiselaNeural" },
+          "flutterTts": { "rate": 0.7, "pitch": 1.0 }
+        }
+      ]
     }
   }
 }
