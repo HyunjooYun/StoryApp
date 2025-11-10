@@ -8,11 +8,17 @@
 
 ---
 
+
 ## [최근 업데이트 내역]
 - 2025-11-10: StatusReport.md → STATUSREPORT.md로 파일명 변경
 - 2025-11-10: 기능별 상세 진행상황, 기술적 의사결정, 구조, 데이터 예시, FAQ, 개발환경 등까지 포함해 더 자세하게 확장
 - 2025-11-10: 독일어 TTS(Conrad/Gisela) 지원, voice_config.json/코드 동시 반영
 - 2025-11-10: README.md, STATUSREPORT.md 최신화
+
+### [2025-11-10 추가 작업]
+- 동화 읽기(story_reading) 화면 TTS 재생 로직 전면 개선: 텍스트 박스 내 모든 문장 순차 재생, 페이지 이동/멈춤 시 즉시 중지, 현재 페이지에만 재생 동작 보장
+- Vietnamese TTS 모델 이슈 진단: voice_config.json 및 Azure TTS 서비스 연동 상태 점검, 모델명/리전/API 오류 가능성 안내
+- Python 코드 현황 점검: 백엔드/서버 코드 없음, create_icon.py(아이콘 생성용)만 존재
 
 
 작성일: 2025-11-10

@@ -4,14 +4,12 @@ import '../providers/story_provider.dart';
 import '../models/story.dart';
 import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
+import '../services/azure_tts_service.dart';
+import 'dart:async';
 
 class StoryReadingScreen extends StatefulWidget {
   final Story story;
-  
-  const StoryReadingScreen({
-    super.key,
-    required this.story,
-  });
+  const StoryReadingScreen({super.key, required this.story});
 
   @override
   State<StoryReadingScreen> createState() => _StoryReadingScreenState();
@@ -21,47 +19,39 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   int _currentPage = 0;
   bool _isPlaying = false;
   late List<String> _pages;
-  List<String>? _audioPaths;
   final AudioPlayerService _audioPlayerService = AudioPlayerService();
-  
+  final AzureTTSService _ttsService = AzureTTSService();
+  List<String>? _currentPageSentences;
+  bool _isTtsPlaying = false;
+
   @override
   void initState() {
     super.initState();
-    // Initialize pages from story's adapted script or original content
     final initialContent = widget.story.adaptedScript ?? widget.story.content;
     _pages = _splitContentIntoPages(initialContent);
-    _audioPaths = widget.story.audioPaths;
+    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
   }
-  
+
+  List<String> _splitPageIntoSentences(String pageContent) {
+    return pageContent
+        .split(RegExp(r'[\n\r]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
   List<String> _splitContentIntoPages(String content) {
     if (content.isEmpty) return [''];
-    
-    // Split by newline for sentence-by-sentence display
     final sentences = content
         .split('\n')
         .where((s) => s.trim().isNotEmpty)
         .toList();
-    
     if (sentences.isEmpty) return [''];
-    
-    // Estimate character limit per page based on text box size
-    // Text box height: 400px (fixed)
-    // Padding: 24px * 2 = 48px, Available height: ~352px
-    // Font size: 20, line height: 1.8 = 36px per line
-    // Available lines: ~9-10 lines
-    // Characters per line: ~35 (considering Korean characters and line breaks)
-    // Total chars per page: ~350
     const int estimatedCharsPerPage = 350;
-    
     final pages = <String>[];
     String currentPage = '';
-    
     for (var sentence in sentences) {
-      final testPage = currentPage.isEmpty 
-          ? sentence 
-          : '$currentPage\n$sentence';
-      
-      // Check if adding this sentence exceeds the page limit
+      final testPage = currentPage.isEmpty ? sentence : '$currentPage\n$sentence';
       if (testPage.length > estimatedCharsPerPage && currentPage.isNotEmpty) {
         pages.add(currentPage.trim());
         currentPage = sentence;
@@ -69,11 +59,9 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         currentPage = testPage;
       }
     }
-    
     if (currentPage.isNotEmpty) {
       pages.add(currentPage.trim());
     }
-    
     return pages.isEmpty ? [''] : pages;
   }
 
@@ -85,117 +73,106 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         color: const Color(0xFF7665FF),
         child: Stack(
           children: [
-              // Settings button
-              Positioned(
-                top: 60,
-                left: 20,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
+            // 설정 버튼
+            Positioned(
+              top: 60,
+              left: 20,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: TextButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                    );
+                  },
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   ),
-                  child: TextButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                      );
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                    child: const Text(
-                      '설정 Setting',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                  child: const Text(
+                    '설정 Setting',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ),
+            // 닫기 버튼
+            Positioned(
+              top: 60,
+              right: 20,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 32),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+            // 메인 컨텐츠
+            Consumer<StoryProvider>(
+              builder: (context, provider, child) {
+                final characterImage = provider.settings.getCharacterImage();
+                final screenWidth = MediaQuery.of(context).size.width;
+                return SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 110),
+                      // 캐릭터 이미지
+                      Container(
+                        width: 360,
+                        height: 360,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5E6D3),
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 10,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: Image.asset(
+                            characterImage,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Icon(Icons.person, size: 120, color: Color(0xFF7C4DFF));
+                            },
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
-              ),
-              
-              // Close button
-              Positioned(
-                top: 60,
-                right: 20,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 32),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-              
-              // Main content
-              Consumer<StoryProvider>(
-                builder: (context, provider, child) {
-                  final characterImage = provider.settings.getCharacterImage();
-                  final screenWidth = MediaQuery.of(context).size.width;
-                  
-                  return SingleChildScrollView(
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 110), // 80 + 30 = 110
-                        
-                        // Character image (120% size: 360x360)
-                        Container(
-                          width: 360,
-                          height: 360,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5E6D3),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: Image.asset(
-                              characterImage,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return const Icon(Icons.person, size: 120, color: Color(0xFF7C4DFF));
-                              },
+                      const SizedBox(height: 30),
+                      // 텍스트 박스
+                      Container(
+                        width: screenWidth * 0.8,
+                        height: 400,
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 10,
+                              offset: const Offset(0, 5),
                             ),
+                          ],
+                        ),
+                        child: Text(
+                          _pages[_currentPage],
+                          style: const TextStyle(
+                            fontSize: 20,
+                            height: 1.8,
+                            color: Color(0xFF333333),
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
-                        
-                        const SizedBox(height: 30), // 캐릭터 이미지 아래 여백
-                        
-                        // Text content box (fixed size: 80% width, 400px height)
-                        Container(
-                          width: screenWidth * 0.8, // 80% of screen width
-                          height: 400, // Fixed 400px height
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: Text(
-                            _pages[_currentPage],
-                            style: const TextStyle(
-                              fontSize: 20,
-                              height: 1.8,
-                              color: Color(0xFF333333),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      
-                      const SizedBox(height: 20), // 텍스트 박스 아래 여백
-                      
-                      // Page number only (no slider)
+                      ),
+                      const SizedBox(height: 20),
+                      // 페이지 번호
                       Text(
                         '${_currentPage + 1}/${_pages.length}',
                         style: const TextStyle(
@@ -204,10 +181,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                           color: Colors.white,
                         ),
                       ),
-                      
-                      const SizedBox(height: 30), // 페이지 번호 아래 여백
-                      
-                      // Control buttons
+                      const SizedBox(height: 30),
+                      // 컨트롤 버튼
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: Row(
@@ -219,10 +194,12 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               _currentPage > 0,
                               () async {
                                 if (_currentPage > 0) {
-                                  await _audioPlayerService.stop();
+                                  await _stopAllAudio();
                                   setState(() {
                                     _currentPage--;
                                     _isPlaying = false;
+                                    _isTtsPlaying = false;
+                                    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
                                   });
                                 }
                               },
@@ -234,10 +211,10 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               _isPlaying ? Icons.pause : Icons.play_arrow,
                               true,
                               () async {
-                                if (_isPlaying) {
-                                  await _stopPlaying(Provider.of<StoryProvider>(context, listen: false));
+                                if (_isPlaying || _isTtsPlaying) {
+                                  await _stopAllAudio();
                                 } else {
-                                  await _startPlaying(Provider.of<StoryProvider>(context, listen: false));
+                                  await _playCurrentPageTTS(context);
                                 }
                               },
                               true,
@@ -248,9 +225,11 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               Icons.skip_next,
                               _currentPage < _pages.length - 1 && !_isPlaying,
                               () async {
-                                if (_currentPage < _pages.length - 1 && !_isPlaying) {
+                                if (_currentPage < _pages.length - 1 && !_isPlaying && !_isTtsPlaying) {
+                                  await _stopAllAudio();
                                   setState(() {
                                     _currentPage++;
+                                    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
                                   });
                                 }
                               },
@@ -259,33 +238,31 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                           ],
                         ),
                       ),
-                      
-                      const SizedBox(height: 80), // 컨트롤 버튼 아래 여백 (홈 버튼 위 20px + 홈 버튼 높이 56px + 하단 여백 4px)
+                      const SizedBox(height: 80),
                     ],
-                    ),
-                  );
-                },
-              ),
-              
-              // Home button (flush with bottom: 0)
-              Positioned(
-                bottom: 0, // 화면 하단에 딱 붙게
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: FloatingActionButton(
-                    onPressed: () => Navigator.popUntil(context, (route) => route.isFirst),
-                    backgroundColor: const Color(0xFF5E35B1),
-                    child: const Icon(Icons.home, color: Colors.white, size: 32),
                   ),
+                );
+              },
+            ),
+            // 홈 버튼
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: FloatingActionButton(
+                  onPressed: () => Navigator.popUntil(context, (route) => route.isFirst),
+                  backgroundColor: const Color(0xFF5E35B1),
+                  child: const Icon(Icons.home, color: Colors.white, size: 32),
                 ),
               ),
-            ],
+            ),
+          ],
         ),
       ),
     );
   }
-  
+
   Widget _buildControlButton(
     String label,
     IconData icon,
@@ -293,14 +270,12 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     VoidCallback onPressed,
     bool isPrimary,
   ) {
-    // Split label into Korean and English parts
     final parts = label.split('\n');
     final koreanText = parts.isNotEmpty ? parts[0] : '';
     final englishText = parts.length > 1 ? parts[1] : '';
-    
     return SizedBox(
-      width: 170, // Reduced from 182 to prevent overflow
-      height: 56, // 80 * 0.7 = 56
+      width: 170,
+      height: 56,
       child: ElevatedButton(
         onPressed: enabled ? onPressed : null,
         style: ElevatedButton.styleFrom(
@@ -340,30 +315,43 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       ),
     );
   }
-  
-  void _onAudioComplete() {
+
+  Future<void> _playCurrentPageTTS(BuildContext context) async {
+    final provider = Provider.of<StoryProvider>(context, listen: false);
+    final sentences = _currentPageSentences ?? _splitPageIntoSentences(_pages[_currentPage]);
+    if (sentences.isEmpty) return;
     setState(() {
+      _isTtsPlaying = true;
+      _isPlaying = true;
+    });
+    try {
+      for (final sentence in sentences) {
+        if (!_isTtsPlaying) break;
+        final audioPath = await _ttsService.generateAudio(
+          text: sentence,
+          language: provider.settings.language,
+          characterGender: provider.settings.gender,
+          age: provider.settings.age,
+        );
+        final completer = Completer<void>();
+        await _audioPlayerService.play(audioPath, onComplete: () {
+          completer.complete();
+        });
+        await completer.future;
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('TTS 오류: $e'), duration: const Duration(seconds: 2)),
+      );
+    }
+    setState(() {
+      _isTtsPlaying = false;
       _isPlaying = false;
     });
   }
 
-  Future<void> _startPlaying(StoryProvider provider) async {
-    if (_audioPaths == null || _audioPaths!.length <= _currentPage) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('음성 파일이 준비되지 않았습니다.'), duration: Duration(seconds: 2)),
-      );
-      setState(() {
-        _isPlaying = false;
-      });
-      return;
-    }
-    setState(() {
-      _isPlaying = true;
-    });
-    await _audioPlayerService.play(_audioPaths![_currentPage], onComplete: _onAudioComplete);
-  }
-
-  Future<void> _stopPlaying(StoryProvider provider) async {
+  Future<void> _stopAllAudio() async {
+    _isTtsPlaying = false;
     await _audioPlayerService.stop();
     setState(() {
       _isPlaying = false;
