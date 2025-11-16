@@ -69,9 +69,72 @@ class AzureTTSService {
         finalRate = rule?.rate ?? _voiceConfig!.defaultConfig.rate;
         finalPitch = rule?.pitch ?? _voiceConfig!.defaultConfig.pitch;
       }
-      // 파라미터 우선순위: 직접 전달 > config
-      final usedRate = speed != null ? speed.toString() : finalRate;
-      final usedPitch = pitch != null ? pitch.toString() : finalPitch;
+      // SSML rate: Azure는 80~120%만 퍼센트로, 그 이하는 'x-slow', 'slow', 'medium', 'fast', 'x-fast' 권장
+      String usedRate;
+      double? rateValue;
+      if (speed != null) {
+        rateValue = speed;
+      } else if (finalRate.contains('.') && double.tryParse(finalRate) != null) {
+        rateValue = double.parse(finalRate);
+      } else {
+        rateValue = double.tryParse(finalRate);
+      }
+      if (rateValue != null) {
+        if (rateValue <= 0.5) {
+          usedRate = 'x-slow';
+        } else if (rateValue <= 0.7) {
+          usedRate = 'slow';
+        } else if (rateValue < 0.95) {
+          usedRate = 'medium';
+        } else if (rateValue <= 1.2) {
+          usedRate = ((rateValue * 100).round()).toString() + '%';
+        } else if (rateValue <= 1.5) {
+          usedRate = 'fast';
+        } else {
+          usedRate = 'x-fast';
+        }
+      } else {
+        usedRate = '100%';
+      }
+
+      // pitch 변환 로직은 기존대로 유지
+      String usedPitch = finalPitch;
+      if (pitch != null) {
+        // Azure expects pitch as percent difference from default (1.0 = 0%)
+        double diff = (pitch - 1.0) * 100;
+        if (diff == 0) {
+          usedPitch = '0%';
+        } else {
+          usedPitch = (diff > 0 ? '+' : '') + diff.round().toString() + '%';
+        }
+      } else if (finalPitch.contains('.') && double.tryParse(finalPitch) != null) {
+        double diff = (double.parse(finalPitch) - 1.0) * 100;
+        if (diff == 0) {
+          usedPitch = '0%';
+        } else {
+          usedPitch = (diff > 0 ? '+' : '') + diff.round().toString() + '%';
+        }
+      }
+
+      // 로그 추가: 실제 적용되는 속도 정보 출력
+      print('[AzureTTS] Requested speed param: '
+        '[36m$speed[0m, config rate: [33m$finalRate[0m, usedRate (SSML): [32m$usedRate[0m');
+      if (pitch != null) {
+        // Azure expects pitch as percent difference from default (1.0 = 0%)
+        double diff = (pitch - 1.0) * 100;
+        if (diff == 0) {
+          usedPitch = '0%';
+        } else {
+          usedPitch = (diff > 0 ? '+' : '') + diff.round().toString() + '%';
+        }
+      } else if (finalPitch.contains('.') && double.tryParse(finalPitch) != null) {
+        double diff = (double.parse(finalPitch) - 1.0) * 100;
+        if (diff == 0) {
+          usedPitch = '0%';
+        } else {
+          usedPitch = (diff > 0 ? '+' : '') + diff.round().toString() + '%';
+        }
+      }
       final voiceName = _getVoiceName(language, characterGender);
       print('AzureTTS generateAudio params:');
       print('  voiceName: $voiceName');
@@ -116,6 +179,7 @@ class AzureTTSService {
       if (len == 0) {
         throw Exception('Saved audio is empty');
       }
+      print('[AzureTTS] mp3 saved at: \x1B[35m$filePath\x1B[0m');
       return filePath;
     } catch (e) {
       throw Exception('Failed to generate audio: $e');

@@ -6,6 +6,7 @@ import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
 import '../services/azure_tts_service.dart';
 import 'dart:async';
+import 'package:flutter/rendering.dart';
 
 class StoryReadingScreen extends StatefulWidget {
   final Story story;
@@ -27,9 +28,10 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   @override
   void initState() {
     super.initState();
-    final initialContent = widget.story.adaptedScript ?? widget.story.content;
-    _pages = _splitContentIntoPages(initialContent);
-    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+  final initialContent = widget.story.adaptedScript ?? widget.story.content;
+  // 페이지네이션은 build에서 실제 박스 크기 알 때 처리
+  _pages = [initialContent];
+  _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
   }
 
   List<String> _splitPageIntoSentences(String pageContent) {
@@ -40,33 +42,59 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         .toList();
   }
 
-  List<String> _splitContentIntoPages(String content) {
-    if (content.isEmpty) return [''];
-    final sentences = content
-        .split('\n')
-        .where((s) => s.trim().isNotEmpty)
-        .toList();
-    if (sentences.isEmpty) return [''];
-    const int estimatedCharsPerPage = 350;
-    final pages = <String>[];
-    String currentPage = '';
-    for (var sentence in sentences) {
-      final testPage = currentPage.isEmpty ? sentence : '$currentPage\n$sentence';
-      if (testPage.length > estimatedCharsPerPage && currentPage.isNotEmpty) {
-        pages.add(currentPage.trim());
-        currentPage = sentence;
+  // 실제 텍스트 박스 크기에 맞춰 페이지네이션
+  List<String> paginateTextByBox({
+    required String text,
+    required double boxWidth,
+    required double boxHeight,
+    required TextStyle style,
+  }) {
+    final lines = text.split(RegExp(r'[\n\r]+')).map((s) => s.trim()).toList();
+    final List<String> pages = [];
+    String current = '';
+    for (int i = 0; i < lines.length; i++) {
+      final test = current.isEmpty ? lines[i] : current + '\n' + lines[i];
+      final tp = TextPainter(
+        text: TextSpan(text: test, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: null,
+      )..layout(maxWidth: boxWidth);
+      if (tp.height > boxHeight && current.isNotEmpty) {
+        pages.add(current);
+        current = lines[i];
       } else {
-        currentPage = testPage;
+        current = test;
       }
     }
-    if (currentPage.isNotEmpty) {
-      pages.add(currentPage.trim());
-    }
-    return pages.isEmpty ? [''] : pages;
+    if (current.isNotEmpty) pages.add(current);
+    return pages;
   }
 
   @override
   Widget build(BuildContext context) {
+    // 텍스트 박스 크기 측정용
+    final screenWidth = MediaQuery.of(context).size.width;
+    final boxWidth = screenWidth * 0.8;
+    final boxHeight = 400.0;
+    final textStyle = const TextStyle(
+      fontSize: 20,
+      height: 1.8,
+      color: Color(0xFF333333),
+      fontWeight: FontWeight.w500,
+    );
+    // 페이지네이션 동적 적용
+    final initialContent = widget.story.adaptedScript ?? widget.story.content;
+    _pages = paginateTextByBox(
+      text: initialContent,
+      boxWidth: boxWidth,
+      boxHeight: boxHeight,
+      style: textStyle,
+    );
+    if (_currentPage >= _pages.length) {
+      _currentPage = _pages.length - 1;
+    }
+    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+
     return Scaffold(
       backgroundColor: const Color(0xFF7665FF),
       body: Container(
@@ -147,8 +175,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                       const SizedBox(height: 30),
                       // 텍스트 박스
                       Container(
-                        width: screenWidth * 0.8,
-                        height: 400,
+                        width: boxWidth,
+                        height: boxHeight,
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
                           color: Colors.white,
@@ -163,12 +191,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                         ),
                         child: Text(
                           _pages[_currentPage],
-                          style: const TextStyle(
-                            fontSize: 20,
-                            height: 1.8,
-                            color: Color(0xFF333333),
-                            fontWeight: FontWeight.w500,
-                          ),
+                          style: textStyle,
                         ),
                       ),
                       const SizedBox(height: 20),

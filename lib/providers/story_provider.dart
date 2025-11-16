@@ -9,6 +9,15 @@ import '../services/openai_service.dart';
 import '../services/azure_tts_service.dart';
 
 class StoryProvider extends ChangeNotifier {
+  // Safely add a new story to the top of the list and notify listeners
+  void addStory(Story story) {
+    _stories.insert(0, story);
+    notifyListeners();
+  }
+  // Expose services for UI (read-only)
+  OpenAIService get openAIService => _openAIService;
+  AzureTTSService get azureTTSService => _azureTTSService;
+  TranslationService get translationService => _translationService;
   final StoryService _storyService = StoryService();
   final TTSService _ttsService = TTSService();
   final TranslationService _translationService = TranslationService();
@@ -47,7 +56,7 @@ class StoryProvider extends ChangeNotifier {
     await _ttsService.initialize();
     await _settingsService.initialize();
     
-    _stories = _storyService.getAllStories();
+  _stories = List<Story>.from(_storyService.getAllStories());
     _settings = await _settingsService.loadSettings();
     
     _isLoading = false;
