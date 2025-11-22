@@ -5,26 +5,24 @@ class StorySettings {
   final double speechRate;
   final double pitch;
   final double volume;
-  
+
   StorySettings({
     required this.language,
     required this.age,
     required this.gender,
-    this.speechRate = 0.6,
+    this.speechRate = 0.5,
     this.pitch = 1.0,
     this.volume = 0.9,
   });
-  
+
   String getCharacterImage() {
-    return gender == 'male' 
-        ? 'assets/images/MH.png' 
-        : 'assets/images/SY.png';
+    return gender == 'male' ? 'assets/images/MH.png' : 'assets/images/SY.png';
   }
-  
+
   String getCharacterName() {
     return gender == 'male' ? '민호' : '수영';
   }
-  
+
   StorySettings copyWith({
     String? language,
     int? age,
@@ -42,7 +40,7 @@ class StorySettings {
       volume: volume ?? this.volume,
     );
   }
-  
+
   Map<String, dynamic> toJson() {
     return {
       'language': language,
@@ -53,7 +51,7 @@ class StorySettings {
       'volume': volume,
     };
   }
-  
+
   factory StorySettings.fromJson(Map<String, dynamic> json) {
     return StorySettings(
       language: json['language'] ?? '한국어',

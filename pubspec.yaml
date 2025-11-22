@@ -15,7 +15,8 @@ dependencies:
   
   # Audio & TTS
   flutter_tts: ^4.0.2
-  audioplayers: ^5.2.1
+ # audioplayers: ^5.2.1
+  audioplayers: ^6.5.1
   
   # State Management
   provider: ^6.1.1
@@ -28,19 +29,23 @@ dependencies:
   translator: ^1.0.0
   
   # Utilities
-  flutter_launcher_icons: ^0.13.1
+  #flutter_launcher_icons: ^0.13.1
+  flutter_launcher_icons: ^0.14.4
   
   # Environment Variables
-  flutter_dotenv: ^5.1.0
+  #flutter_dotenv: ^5.1.0
+  flutter_dotenv: ^6.0.0
   
   # HTTP Client for API calls
   http: ^1.1.0
-  file_picker: ^10.3.6
+ # file_picker: ^6.1.1
+  file_picker: ^10.3.7
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+ # flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
@@ -51,6 +56,10 @@ flutter:
     - assets/audio/
     - assets/voice_config.json
     - .env
+    - assets/images/MH_lip_ani.png
+    - assets/images/SY_lip_ani.png
+    - assets/images/MH_viseme/
+    - assets/images/SY_viseme/
   
   fonts:
     - family: KoPubWorldDotum
@@ -70,5 +79,5 @@ flutter_launcher_icons:
   adaptive_icon_foreground: "assets/images/app_icon.png"
 
 tts:
-  speed: 0.8   # 0.5 ~ 2.0 (기본값 1.0)
+  speed: 1.0   # 0.5 ~ 2.0 (기본값 1.0)
   pitch: 1.1   # 0.5 ~ 2.0 (기본값 1.0)

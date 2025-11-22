@@ -6,6 +6,7 @@ import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
 import '../services/azure_tts_service.dart';
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/rendering.dart';
 
 class StoryReadingScreen extends StatefulWidget {
@@ -17,6 +18,7 @@ class StoryReadingScreen extends StatefulWidget {
 }
 
 class _StoryReadingScreenState extends State<StoryReadingScreen> {
+  int _currentVisemeId = 0; // 립싱크 neutral
   int _currentPage = 0;
   bool _isPlaying = false;
   late List<String> _pages;
@@ -28,10 +30,33 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   @override
   void initState() {
     super.initState();
-  final initialContent = widget.story.adaptedScript ?? widget.story.content;
-  // 페이지네이션은 build에서 실제 박스 크기 알 때 처리
-  _pages = [initialContent];
-  _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+    final initialContent = widget.story.adaptedScript ?? widget.story.content;
+    _pages = [initialContent];
+    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+    _currentVisemeId = 0; // neutral
+  }
+  // viseme 이미지 파일명 매핑 (viseme.md 참조)
+  static const Map<int, String> visemeFileMap = {
+    0: 'viseme_00_neutral.png',
+    1: 'viseme_01_bmp.png',
+    2: 'viseme_02_ai.png',
+    3: 'viseme_03_eh.png',
+    4: 'viseme_04_aa.png',
+    5: 'viseme_05_ah.png',
+    6: 'viseme_06_ao.png',
+    7: 'viseme_07_uw.png',
+    8: 'viseme_08_oy.png',
+    9: 'viseme_09_sz.png',
+    10: 'viseme_10_ch.png',
+    11: 'viseme_11_lr.png',
+    12: 'viseme_12_fv.png',
+  };
+
+  String getLipSyncCharacterImage(String gender) {
+    return gender == 'male' ? 'assets/images/MH_lip_ani.png' : 'assets/images/SY_lip_ani.png';
+  }
+  String getVisemeFolder(String gender) {
+    return gender == 'male' ? 'assets/images/MH_viseme/' : 'assets/images/SY_viseme/';
   }
 
   List<String> _splitPageIntoSentences(String pageContent) {
@@ -95,6 +120,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     }
     _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
 
+    final provider = Provider.of<StoryProvider>(context, listen: false);
+    final gender = provider.settings.gender;
     return Scaffold(
       backgroundColor: const Color(0xFF7665FF),
       body: Container(
@@ -140,37 +167,74 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
             // 메인 컨텐츠
             Consumer<StoryProvider>(
               builder: (context, provider, child) {
-                final characterImage = provider.settings.getCharacterImage();
                 final screenWidth = MediaQuery.of(context).size.width;
+                // 립싱크 애니메이션: 캐릭터 + viseme 이미지 스와핑
                 return SingleChildScrollView(
                   child: Column(
                     children: [
                       const SizedBox(height: 110),
-                      // 캐릭터 이미지
-                      Container(
-                        width: 360,
-                        height: 360,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF5E6D3),
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
+                      // 캐릭터 이미지 + 립싱크 viseme 오버레이
+                      Stack(
+                        children: [
+                          Container(
+                            width: 360,
+                            height: 360,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF5E6D3),
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 5),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(20),
-                          child: Image.asset(
-                            characterImage,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Icon(Icons.person, size: 120, color: Color(0xFF7C4DFF));
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(20),
+                              child: Image.asset(
+                                getLipSyncCharacterImage(gender),
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return const Icon(Icons.person, size: 120, color: Color(0xFF7C4DFF));
+                                },
+                              ),
+                            ),
+                          ),
+                          // 립싱크 viseme 이미지 (스와핑)
+                          // 캐릭터 박스 크기에 따라 viseme 위치 자동 조정
+                          Builder(
+                            builder: (context) {
+                              // 박스 크기
+                              double characterBoxWidth = 360;
+                              double characterBoxHeight = 360;
+                              // 원본 기준 좌표
+                              const double baseX = 430;
+                              const double baseY = 453;
+                              const double baseWidth = 1024;
+                              const double baseHeight = 1024;
+                              // 실제 위치 계산
+                              double visemeX = baseX * (characterBoxWidth / baseWidth);
+                              double visemeY = baseY * (characterBoxHeight / baseHeight);
+                              // viseme 이미지 크기를 캐릭터 박스 비율에 맞게 자동 조정
+                              // viseme 이미지 크기를 캐릭터 박스 비율에 맞게 자동 조정
+                              const double visemeBaseWidth = 135;
+                              const double visemeBaseHeight = 104;
+                              double visemeWidth = visemeBaseWidth * (characterBoxWidth / baseWidth);
+                              double visemeHeight = visemeBaseHeight * (characterBoxHeight / baseHeight);
+                              return Positioned(
+                                left: visemeX,
+                                top: visemeY,
+                                child: Image.asset(
+                                  getVisemeFolder(gender) + visemeFileMap[_currentVisemeId]!,
+                                  width: visemeWidth,
+                                  height: visemeHeight,
+                                  fit: BoxFit.contain,
+                                ),
+                              );
                             },
                           ),
-                        ),
+                        ],
                       ),
                       const SizedBox(height: 30),
                       // 텍스트 박스
@@ -339,6 +403,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     );
   }
 
+  // TTS에서 viseme id를 받아 이미지 스와핑 (예시: 랜덤 스와핑, 실제 구현은 TTS viseme 이벤트와 연동 필요)
   Future<void> _playCurrentPageTTS(BuildContext context) async {
     final provider = Provider.of<StoryProvider>(context, listen: false);
     final sentences = _currentPageSentences ?? _splitPageIntoSentences(_pages[_currentPage]);
@@ -357,8 +422,21 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
           age: provider.settings.age,
         );
         final completer = Completer<void>();
+        // 예시: TTS 재생 중 viseme id를 랜덤하게 스와핑 (실제는 TTS viseme 이벤트와 연동 필요)
+        Timer.periodic(const Duration(milliseconds: 120), (timer) {
+          if (!_isTtsPlaying) {
+            timer.cancel();
+            return;
+          }
+          setState(() {
+            _currentVisemeId = Random().nextInt(13); // 0~12
+          });
+        });
         await _audioPlayerService.play(audioPath, onComplete: () {
           completer.complete();
+        });
+        setState(() {
+          _currentVisemeId = 0; // TTS 끝나면 neutral
         });
         await completer.future;
       }
@@ -370,6 +448,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     setState(() {
       _isTtsPlaying = false;
       _isPlaying = false;
+      _currentVisemeId = 0; // TTS 종료 시 neutral
     });
   }
 
