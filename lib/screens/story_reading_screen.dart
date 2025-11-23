@@ -4,10 +4,10 @@ import '../providers/story_provider.dart';
 import '../models/story.dart';
 import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
-import '../services/azure_tts_service.dart';
+import '../services/viseme_event_service.dart';
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/rendering.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 class StoryReadingScreen extends StatefulWidget {
   final Story story;
@@ -19,11 +19,12 @@ class StoryReadingScreen extends StatefulWidget {
 
 class _StoryReadingScreenState extends State<StoryReadingScreen> {
   int _currentVisemeId = 0; // 립싱크 neutral
+  VisemeEventService? _visemeService;
   int _currentPage = 0;
   bool _isPlaying = false;
   late List<String> _pages;
   final AudioPlayerService _audioPlayerService = AudioPlayerService();
-  final AzureTTSService _ttsService = AzureTTSService();
+  // AzureTTSService는 REST 기반에서만 사용, WebSocket 기반에서는 불필요
   List<String>? _currentPageSentences;
   bool _isTtsPlaying = false;
 
@@ -34,7 +35,36 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     _pages = [initialContent];
     _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
     _currentVisemeId = 0; // neutral
+
+    // WebSocket 연결만 여기서 해둔다. (이 시점에서는 이벤트 listen 안 함)
+    _visemeService =
+        VisemeEventService("ws://192.168.0.10:8000/ws/tts"); // 서버 주소에 맞게 변경
   }
+
+/*
+  @override
+  void initState() {
+    super.initState();
+    final initialContent = widget.story.adaptedScript ?? widget.story.content;
+    _pages = [initialContent];
+    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+    _currentVisemeId = 0; // neutral
+    _visemeService = VisemeEventService("ws://192.168.0.10:8000/ws/tts"); // 서버 주소에 맞게 변경
+    _visemeService!.events.listen((event) {
+      if (event.containsKey('viseme_id')) {
+        setState(() {
+          _currentVisemeId = event['viseme_id'] ?? 0;
+        });
+      }
+      if (event.containsKey('error')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('TTS 오류: ${event['error']}'), duration: const Duration(seconds: 2)),
+        );
+      }
+    });
+  }
+*/
+
   // viseme 이미지 파일명 매핑 (viseme.md 참조)
   static const Map<int, String> visemeFileMap = {
     0: 'viseme_00_neutral.png',
@@ -53,10 +83,15 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   };
 
   String getLipSyncCharacterImage(String gender) {
-    return gender == 'male' ? 'assets/images/MH_lip_ani.png' : 'assets/images/SY_lip_ani.png';
+    return gender == 'male'
+        ? 'assets/images/MH_lip_ani.png'
+        : 'assets/images/SY_lip_ani.png';
   }
+
   String getVisemeFolder(String gender) {
-    return gender == 'male' ? 'assets/images/MH_viseme/' : 'assets/images/SY_viseme/';
+    return gender == 'male'
+        ? 'assets/images/MH_viseme/'
+        : 'assets/images/SY_viseme/';
   }
 
   List<String> _splitPageIntoSentences(String pageContent) {
@@ -98,8 +133,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   @override
   Widget build(BuildContext context) {
     // 텍스트 박스 크기 측정용
-    final screenWidth = MediaQuery.of(context).size.width;
-    final boxWidth = screenWidth * 0.8;
+    // 미사용 screenWidth 변수 완전 제거
+    final boxWidth = MediaQuery.of(context).size.width * 0.8;
     final boxHeight = 400.0;
     final textStyle = const TextStyle(
       fontSize: 20,
@@ -141,12 +176,14 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                   onPressed: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                      MaterialPageRoute(
+                          builder: (context) => const SettingsScreen()),
                     );
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   ),
                   child: const Text(
                     '설정 Setting',
@@ -167,7 +204,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
             // 메인 컨텐츠
             Consumer<StoryProvider>(
               builder: (context, provider, child) {
-                final screenWidth = MediaQuery.of(context).size.width;
+                // 미사용 screenWidth 변수 완전 제거
                 // 립싱크 애니메이션: 캐릭터 + viseme 이미지 스와핑
                 return SingleChildScrollView(
                   child: Column(
@@ -196,7 +233,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                                 getLipSyncCharacterImage(gender),
                                 fit: BoxFit.cover,
                                 errorBuilder: (context, error, stackTrace) {
-                                  return const Icon(Icons.person, size: 120, color: Color(0xFF7C4DFF));
+                                  return const Icon(Icons.person,
+                                      size: 120, color: Color(0xFF7C4DFF));
                                 },
                               ),
                             ),
@@ -214,19 +252,24 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               const double baseWidth = 1024;
                               const double baseHeight = 1024;
                               // 실제 위치 계산
-                              double visemeX = baseX * (characterBoxWidth / baseWidth);
-                              double visemeY = baseY * (characterBoxHeight / baseHeight);
+                              double visemeX =
+                                  baseX * (characterBoxWidth / baseWidth);
+                              double visemeY =
+                                  baseY * (characterBoxHeight / baseHeight);
                               // viseme 이미지 크기를 캐릭터 박스 비율에 맞게 자동 조정
                               // viseme 이미지 크기를 캐릭터 박스 비율에 맞게 자동 조정
                               const double visemeBaseWidth = 135;
                               const double visemeBaseHeight = 104;
-                              double visemeWidth = visemeBaseWidth * (characterBoxWidth / baseWidth);
-                              double visemeHeight = visemeBaseHeight * (characterBoxHeight / baseHeight);
+                              double visemeWidth = visemeBaseWidth *
+                                  (characterBoxWidth / baseWidth);
+                              double visemeHeight = visemeBaseHeight *
+                                  (characterBoxHeight / baseHeight);
                               return Positioned(
                                 left: visemeX,
                                 top: visemeY,
                                 child: Image.asset(
-                                  getVisemeFolder(gender) + visemeFileMap[_currentVisemeId]!,
+                                  getVisemeFolder(gender) +
+                                      visemeFileMap[_currentVisemeId]!,
                                   width: visemeWidth,
                                   height: visemeHeight,
                                   fit: BoxFit.contain,
@@ -286,7 +329,9 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                                     _currentPage--;
                                     _isPlaying = false;
                                     _isTtsPlaying = false;
-                                    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+                                    _currentPageSentences =
+                                        _splitPageIntoSentences(
+                                            _pages[_currentPage]);
                                   });
                                 }
                               },
@@ -312,11 +357,15 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               Icons.skip_next,
                               _currentPage < _pages.length - 1 && !_isPlaying,
                               () async {
-                                if (_currentPage < _pages.length - 1 && !_isPlaying && !_isTtsPlaying) {
+                                if (_currentPage < _pages.length - 1 &&
+                                    !_isPlaying &&
+                                    !_isTtsPlaying) {
                                   await _stopAllAudio();
                                   setState(() {
                                     _currentPage++;
-                                    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
+                                    _currentPageSentences =
+                                        _splitPageIntoSentences(
+                                            _pages[_currentPage]);
                                   });
                                 }
                               },
@@ -338,7 +387,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
               right: 0,
               child: Center(
                 child: FloatingActionButton(
-                  onPressed: () => Navigator.popUntil(context, (route) => route.isFirst),
+                  onPressed: () =>
+                      Navigator.popUntil(context, (route) => route.isFirst),
                   backgroundColor: const Color(0xFF5E35B1),
                   child: const Icon(Icons.home, color: Colors.white, size: 32),
                 ),
@@ -366,7 +416,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       child: ElevatedButton(
         onPressed: enabled ? onPressed : null,
         style: ElevatedButton.styleFrom(
-          backgroundColor: isPrimary ? const Color(0xFF5E35B1) : const Color(0xFFACA2FF),
+          backgroundColor:
+              isPrimary ? const Color(0xFF5E35B1) : const Color(0xFFACA2FF),
           foregroundColor: Colors.white,
           disabledBackgroundColor: Colors.grey[300],
           disabledForegroundColor: Colors.grey[600],
@@ -403,6 +454,110 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     );
   }
 
+  Future<void> _playCurrentPageTTS(BuildContext context) async {
+    final provider = Provider.of<StoryProvider>(context, listen: false);
+    final settings = provider.settings;
+    final sentences =
+        _currentPageSentences ?? _splitPageIntoSentences(_pages[_currentPage]);
+
+    if (sentences.isEmpty) return;
+
+    // 1. 현재 페이지 전체 텍스트 (혹은 문장 단위로 바꾸고 싶으면 sentences[i] 사용)
+    final String ttsText = _pages[_currentPage];
+
+    setState(() {
+      _isTtsPlaying = true;
+      _isPlaying = true;
+    });
+
+    try {
+      // 🔹 (1) 여기서 Azure REST를 통해 mp3를 생성하고, 로컬 경로를 받아야 함
+      // TODO: 너의 기존 TTS REST 코드에서 현재 페이지의 mp3 파일 경로를 받아오는 로직으로 교체해.
+      // 예: final mp3FilePath = await AzureTtsService.instance.synthesizeAndSave(ttsText, settings);
+      final String mp3FilePath = 'TODO: 여기에 현재 페이지 mp3 경로를 넣어야 함';
+
+      // 🔹 (2) 로컬 mp3 재생
+      final audioPlayer = AudioPlayer();
+      await audioPlayer.play(DeviceFileSource(mp3FilePath));
+
+      // 🔹 (3) viseme 이벤트 큐 준비
+      final List<Map<String, dynamic>> visemeQueue =
+          []; // { viseme_id, audio_offset_ms }
+
+      // 기존 WebSocket 서비스에서 이벤트를 받아온다.
+      final visemeStream = _visemeService!.events;
+
+      final visemeSub = visemeStream.listen((event) {
+        // C 구조 기준 서버 응답 형식: { type: 'viseme', viseme_id: int, audio_offset_ms: int }
+        if (event['type'] == 'viseme') {
+          visemeQueue.add({
+            'viseme_id': event['viseme_id'] ?? 0,
+            'audio_offset_ms': event['audio_offset_ms'] ?? 0,
+          });
+        } else if (event['type'] == 'error') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('TTS 오류: ${event['message'] ?? event['error']}'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      });
+
+      // 🔹 (4) 서버에 viseme 스트리밍 요청 보내기
+      //  - C 구조 서버: { text, voice, speaking_rate } 형태로 요청 받음
+      //  - 이 부분은 VisemeEventService 안에서 구현해 두었으면 그 메서드를 호출해주면 됨.
+      //  - 여기서는 sendRequest 같은 메서드가 있다고 가정하고 TODO로 표시.
+      // 예: _visemeService!.sendRequest(text: ttsText, voice: settings.voice, speakingRate: settings.speakingRate);
+      // TODO: VisemeEventService에 맞게 실제 요청 메서드로 교체
+      // _visemeService!.sendTtsRequest(ttsText, settings.voice, settings.speed);
+
+      // 🔹 (5) 오디오 위치와 visemeQueue의 audio_offset_ms를 맞추는 타이머
+      final timer =
+          Timer.periodic(const Duration(milliseconds: 20), (timer) async {
+        final position = await audioPlayer.getCurrentPosition(); // Duration
+        final posMs = position?.inMilliseconds ?? 0;
+
+        // visemeQueue에서 audio_offset_ms <= 현재 재생 위치인 것들을 순서대로 처리
+        while (visemeQueue.isNotEmpty &&
+            (visemeQueue.first['audio_offset_ms'] as int) <= posMs) {
+          final viseme = visemeQueue.removeAt(0);
+          setState(() {
+            _currentVisemeId = viseme['viseme_id'] as int;
+          });
+        }
+
+        // 오디오 종료 시
+        if (audioPlayer.state == PlayerState.completed) {
+          timer.cancel();
+          setState(() {
+            _currentVisemeId = 0; // neutral
+          });
+        }
+      });
+
+      // 🔹 (6) 오디오 재생이 끝날 때까지 대기
+      await audioPlayer.onPlayerComplete.first;
+
+      // 리소스 정리
+      timer.cancel();
+      await visemeSub.cancel();
+      await audioPlayer.stop();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('TTS 오류: $e'), duration: const Duration(seconds: 2)),
+      );
+    } finally {
+      setState(() {
+        _isTtsPlaying = false;
+        _isPlaying = false;
+        _currentVisemeId = 0; // TTS 종료 시 neutral
+      });
+    }
+  }
+
+/*
   // TTS에서 viseme id를 받아 이미지 스와핑 (예시: 랜덤 스와핑, 실제 구현은 TTS viseme 이벤트와 연동 필요)
   Future<void> _playCurrentPageTTS(BuildContext context) async {
     final provider = Provider.of<StoryProvider>(context, listen: false);
@@ -413,33 +568,39 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       _isPlaying = true;
     });
     try {
-      for (final sentence in sentences) {
-        if (!_isTtsPlaying) break;
-        final audioPath = await _ttsService.generateAudio(
-          text: sentence,
-          language: provider.settings.language,
-          characterGender: provider.settings.gender,
-          age: provider.settings.age,
-        );
-        final completer = Completer<void>();
-        // 예시: TTS 재생 중 viseme id를 랜덤하게 스와핑 (실제는 TTS viseme 이벤트와 연동 필요)
-        Timer.periodic(const Duration(milliseconds: 120), (timer) {
-          if (!_isTtsPlaying) {
-            timer.cancel();
-            return;
-          }
-          setState(() {
-            _currentVisemeId = Random().nextInt(13); // 0~12
+      // 1. 오디오 플레이어로 mp3 재생
+      final audioPlayer = AudioPlayer();
+      await audioPlayer.play(mp3FilePath, isLocal: true);
+
+      // 2. viseme 이벤트 큐에 저장
+      List<Map<String, dynamic>> visemeQueue = []; // {viseme_id, audio_offset}
+      visemeStream.listen((event) {
+        if (event['type'] == 'viseme') {
+          visemeQueue.add({
+            'viseme_id': event['viseme_id'],
+            'audio_offset': event['audio_offset'], // ms 단위
           });
-        });
-        await _audioPlayerService.play(audioPath, onComplete: () {
-          completer.complete();
-        });
-        setState(() {
-          _currentVisemeId = 0; // TTS 끝나면 neutral
-        });
-        await completer.future;
-      }
+        }
+      });
+
+      // 3. 싱크 맞추기 (타이머로 주기적으로 체크)
+      Timer.periodic(Duration(milliseconds: 20), (timer) async {
+        final position = await audioPlayer.getCurrentPosition(); // ms 단위
+        // visemeQueue에서 audio_offset <= position 인 이벤트만 처리
+        while (visemeQueue.isNotEmpty && visemeQueue.first['audio_offset'] <= position) {
+          final viseme = visemeQueue.removeAt(0);
+          setState(() {
+            _currentVisemeId = viseme['viseme_id'];
+          });
+        }
+        // 오디오가 끝나면 타이머 종료
+        if (audioPlayer.state == PlayerState.completed) {
+          timer.cancel();
+          setState(() {
+            _currentVisemeId = 0; // neutral
+          });
+        }
+      });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('TTS 오류: $e'), duration: const Duration(seconds: 2)),
@@ -451,6 +612,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       _currentVisemeId = 0; // TTS 종료 시 neutral
     });
   }
+*/
 
   Future<void> _stopAllAudio() async {
     _isTtsPlaying = false;
@@ -459,4 +621,17 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       _isPlaying = false;
     });
   }
+
+  @override
+  void dispose() {
+    _visemeService?.dispose();
+    super.dispose();
+  }
+
+/*
+  void sendTTSRequest(String text, String voice) {
+    print('sendTTSRequest called: text=$text, voice=$voice');
+    // ...existing code...
+  }
+*/
 }
