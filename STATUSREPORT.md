@@ -12,7 +12,13 @@
 
 
 ## [최근 업데이트 내역]
-## [최근 업데이트 내역]
+
+
+### 2025-11-24
+- story_reading 화면에 TTS 일시정지/재개 및 viseme 동기화를 다시 붙이려다 위젯 트리/상태 코드가 뒤엉켜 Flutter 빌드 실패 발생
+- git restore로 `lib/screens/story_reading_screen.dart`를 마지막 정상 커밋 상태로 복구하여 현재는 안정 버전 유지 (TTS 실행 버튼은 아직 TODO 상태)
+- 다음 작업을 위해 `_playCurrentPageTTS()`에 Azure TTS mp3 생성 로직과 viseme 이벤트 스트림 처리 플로우를 다시 설계해야 함
+- 작업 재개 전 git 분기/백업을 활용해 실험용 브랜치에서 구현 후 병합하는 일정 필요
 
 ### 2025-11-22 ~ 2025-11-23
 - story_reading 화면 텍스트 박스 내 문장 TTS 순차 재생 기능 구현
