@@ -14,6 +14,13 @@
 ## [최근 업데이트 내역]
 
 
+### 2025-11-25
+- Azure Speech SDK 버전 확인(1.47.0) 및 Conda 기반 환경으로 viseme FastAPI 서버 재구동 작업 수행
+- 8000 포트 점유 프로세스(PID 19724) 정리 후 `conda run python -m uvicorn` 조합으로 서버 정상 기동 확인
+- Flutter `dart run` 스크립트가 Flutter SDK 타입 의존성으로 실패하는 이슈 파악, `flutter pub run` 필요성 기록
+- 최신 코드에서 립싱크 애니메이션 미동작 현상 재확인; 원인 미해결 상태로 남기고 추후 디버깅 예정
+
+
 ### 2025-11-24
 - story_reading 화면에 TTS 일시정지/재개 및 viseme 동기화를 다시 붙이려다 위젯 트리/상태 코드가 뒤엉켜 Flutter 빌드 실패 발생
 - git restore로 `lib/screens/story_reading_screen.dart`를 마지막 정상 커밋 상태로 복구하여 현재는 안정 버전 유지 (TTS 실행 버튼은 아직 TODO 상태)
