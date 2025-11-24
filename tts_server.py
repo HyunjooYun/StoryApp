@@ -13,6 +13,16 @@ AZURE_TTS_REGION = os.getenv("AZURE_TTS_REGION")
 app = FastAPI()
 
 
+class _NullAudioOutputStream(speechsdk.audio.PushAudioOutputStreamCallback):
+    """Sink that discards all audio data to avoid using the default speaker."""
+
+    def write(self, audio_buffer: memoryview) -> int:  # type: ignore[override]
+        return len(audio_buffer)
+
+    def close(self) -> None:  # type: ignore[override]
+        pass
+
+
 @app.websocket("/ws/tts")
 async def tts_ws(websocket: WebSocket):
     """
@@ -43,12 +53,31 @@ async def tts_ws(websocket: WebSocket):
         speech_config.speech_synthesis_voice_name = voice
 
         # viseme 이벤트 활성화
-        speech_config.set_property(
-            speechsdk.PropertyId.SpeechServiceResponse_RequestViseme, "true"
-        )
+        if hasattr(
+            speechsdk.PropertyId, "SpeechServiceResponse_RequestViseme"
+        ):
+            speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceResponse_RequestViseme,
+                "true",
+            )
+        else:
+            # Fallback for SDK builds without the enum constant.
+            speech_config.set_property_by_name(
+                "speechserviceconnection_requestviseme", "true"
+            )
 
-        # 오디오는 스피커/파일로 출력하지 않음 (C 구조 핵심)
-        audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=False)
+        # 오디오는 스피커/파일로 출력하지 않고 바로 폐기한다.
+        null_stream = speechsdk.audio.PushAudioOutputStream(_NullAudioOutputStream())
+        audio_config = speechsdk.audio.AudioOutputConfig(stream=null_stream)
+
+        # 명시적으로 기본 스피커 출력 비활성화 (일부 SDK 버전 대응)
+        if hasattr(
+            speechsdk.PropertyId, "SpeechServiceResponse_EnableDefaultOutput"
+        ):
+            speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceResponse_EnableDefaultOutput,
+                "false",
+            )
 
         synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=speech_config,

@@ -5,8 +5,8 @@ import '../models/story.dart';
 import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
 import '../services/viseme_event_service.dart';
+import '../services/azure_tts_service.dart';
 import 'dart:async';
-import 'package:flutter/rendering.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 class StoryReadingScreen extends StatefulWidget {
@@ -24,9 +24,15 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   bool _isPlaying = false;
   late List<String> _pages;
   final AudioPlayerService _audioPlayerService = AudioPlayerService();
-  // AzureTTSService는 REST 기반에서만 사용, WebSocket 기반에서는 불필요
+  final AzureTTSService _azureTTSService = AzureTTSService();
   List<String>? _currentPageSentences;
   bool _isTtsPlaying = false;
+  AudioPlayer? _ttsAudioPlayer;
+  StreamSubscription<Map<String, dynamic>>? _visemeStreamSubscription;
+  StreamSubscription<void>? _ttsCompletionSubscription;
+  Timer? _lipSyncTimer;
+  final List<Map<String, dynamic>> _visemeQueue = [];
+  bool _isPaused = false;
 
   @override
   void initState() {
@@ -80,6 +86,31 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     10: 'viseme_10_ch.png',
     11: 'viseme_11_lr.png',
     12: 'viseme_12_fv.png',
+  };
+
+  static const Map<int, int> _azureVisemeToUniversal = {
+    0: 0, // silence
+    1: 5, // ae/ax/ah -> AH
+    2: 4, // aa -> AA
+    3: 6, // ao -> AO
+    4: 3, // ey/eh/uh -> EH
+    5: 11, // er -> LR
+    6: 2, // iy/ih -> AI
+    7: 7, // uw/w -> UW
+    8: 6, // ow -> AO
+    9: 8, // aw -> OY
+    10: 8, // oy -> OY
+    11: 2, // ay -> AI
+    12: 0, // h -> neutral mouth
+    13: 11, // r -> LR
+    14: 11, // l -> LR
+    15: 9, // s/z -> SZ
+    16: 10, // sh/ch -> CH
+    17: 9, // th/dh -> SZ (closest)
+    18: 12, // f/v -> FV
+    19: 1, // d/t/n -> BMP (tongue behind teeth)
+    20: 9, // k/g/ng -> SZ style (closed mouth)
+    21: 1, // p/b/m -> BMP
   };
 
   String getLipSyncCharacterImage(String gender) {
@@ -267,12 +298,24 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               return Positioned(
                                 left: visemeX,
                                 top: visemeY,
-                                child: Image.asset(
-                                  getVisemeFolder(gender) +
-                                      visemeFileMap[_currentVisemeId]!,
-                                  width: visemeWidth,
-                                  height: visemeHeight,
-                                  fit: BoxFit.contain,
+                                child: AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 70),
+                                  switchInCurve: Curves.easeIn,
+                                  switchOutCurve: Curves.easeOut,
+                                  transitionBuilder: (child, animation) {
+                                    return FadeTransition(
+                                      opacity: animation,
+                                      child: child,
+                                    );
+                                  },
+                                  child: Image.asset(
+                                    key: ValueKey<int>(_currentVisemeId),
+                                    getVisemeFolder(gender) +
+                                        visemeFileMap[_currentVisemeId]!,
+                                    width: visemeWidth,
+                                    height: visemeHeight,
+                                    fit: BoxFit.contain,
+                                  ),
                                 ),
                               );
                             },
@@ -339,12 +382,18 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                             ),
                             const SizedBox(width: 15),
                             _buildControlButton(
-                              _isPlaying ? '멈춤\nPause' : '실행\nPlay',
+                              _isPlaying
+                                  ? '멈춤\nPause'
+                                  : _isPaused && _isTtsPlaying
+                                      ? '재개\nResume'
+                                      : '실행\nPlay',
                               _isPlaying ? Icons.pause : Icons.play_arrow,
                               true,
                               () async {
-                                if (_isPlaying || _isTtsPlaying) {
-                                  await _stopAllAudio();
+                                if (_isPlaying) {
+                                  await _pauseTtsPlayback();
+                                } else if (_isPaused && _isTtsPlaying) {
+                                  await _resumeTtsPlayback();
                                 } else {
                                   await _playCurrentPageTTS(context);
                                 }
@@ -465,96 +514,191 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     // 1. 현재 페이지 전체 텍스트 (혹은 문장 단위로 바꾸고 싶으면 sentences[i] 사용)
     final String ttsText = _pages[_currentPage];
 
-    setState(() {
-      _isTtsPlaying = true;
-      _isPlaying = true;
-    });
-
     try {
-      // 🔹 (1) 여기서 Azure REST를 통해 mp3를 생성하고, 로컬 경로를 받아야 함
-      // TODO: 너의 기존 TTS REST 코드에서 현재 페이지의 mp3 파일 경로를 받아오는 로직으로 교체해.
-      // 예: final mp3FilePath = await AzureTtsService.instance.synthesizeAndSave(ttsText, settings);
-      final String mp3FilePath = 'TODO: 여기에 현재 페이지 mp3 경로를 넣어야 함';
+      await _stopTtsPlayback(resetState: false);
+      setState(() {
+        _isTtsPlaying = true;
+        _isPlaying = true;
+        _isPaused = false;
+        _currentVisemeId = 0;
+      });
+      _visemeQueue.clear();
+      final audioPlayer = _ttsAudioPlayer ??= AudioPlayer();
+      await audioPlayer.stop();
+      final mp3FilePath = await _azureTTSService.generateAudio(
+        text: ttsText,
+        language: settings.language,
+        characterGender: settings.gender,
+        speed: settings.speechRate,
+        pitch: settings.pitch,
+        age: settings.age,
+      );
 
-      // 🔹 (2) 로컬 mp3 재생
-      final audioPlayer = AudioPlayer();
+      final visemeService = _visemeService;
+      if (visemeService != null) {
+        await _visemeStreamSubscription?.cancel();
+        _visemeStreamSubscription = visemeService.events.listen((event) {
+          if (event['type'] == 'viseme') {
+            final rawViseme = (event['viseme_id'] as num?)?.toInt() ?? 0;
+            final mappedViseme = visemeFileMap.containsKey(rawViseme)
+                ? rawViseme
+                : (_azureVisemeToUniversal[rawViseme] ?? 0);
+            _visemeQueue.add({
+              'viseme_id': mappedViseme,
+              'audio_offset_ms': event['audio_offset_ms'] ?? 0,
+            });
+            if (!visemeFileMap.containsKey(rawViseme) &&
+                !_azureVisemeToUniversal.containsKey(rawViseme)) {
+              debugPrint(
+                  'Unknown viseme id $rawViseme received. Defaulting to neutral.');
+            }
+          } else if (event['type'] == 'error') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content:
+                    Text('TTS 오류: ${event['message'] ?? event['error']}'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        });
+
+        final voiceName =
+            _azureTTSService.resolveVoiceName(settings.language, settings.gender);
+        final effectiveSpeechRate =
+            _azureTTSService.applySpeechRateMultiplier(settings.speechRate);
+        visemeService.sendTTSRequest(
+          text: ttsText,
+          voice: voiceName,
+          speakingRate: effectiveSpeechRate,
+        );
+      }
+
       await audioPlayer.play(DeviceFileSource(mp3FilePath));
 
-      // 🔹 (3) viseme 이벤트 큐 준비
-      final List<Map<String, dynamic>> visemeQueue =
-          []; // { viseme_id, audio_offset_ms }
-
-      // 기존 WebSocket 서비스에서 이벤트를 받아온다.
-      final visemeStream = _visemeService!.events;
-
-      final visemeSub = visemeStream.listen((event) {
-        // C 구조 기준 서버 응답 형식: { type: 'viseme', viseme_id: int, audio_offset_ms: int }
-        if (event['type'] == 'viseme') {
-          visemeQueue.add({
-            'viseme_id': event['viseme_id'] ?? 0,
-            'audio_offset_ms': event['audio_offset_ms'] ?? 0,
-          });
-        } else if (event['type'] == 'error') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('TTS 오류: ${event['message'] ?? event['error']}'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
+      await _ttsCompletionSubscription?.cancel();
+      _ttsCompletionSubscription =
+          audioPlayer.onPlayerComplete.listen((event) async {
+        await _handleTtsPlaybackCompleted();
       });
 
-      // 🔹 (4) 서버에 viseme 스트리밍 요청 보내기
-      //  - C 구조 서버: { text, voice, speaking_rate } 형태로 요청 받음
-      //  - 이 부분은 VisemeEventService 안에서 구현해 두었으면 그 메서드를 호출해주면 됨.
-      //  - 여기서는 sendRequest 같은 메서드가 있다고 가정하고 TODO로 표시.
-      // 예: _visemeService!.sendRequest(text: ttsText, voice: settings.voice, speakingRate: settings.speakingRate);
-      // TODO: VisemeEventService에 맞게 실제 요청 메서드로 교체
-      // _visemeService!.sendTtsRequest(ttsText, settings.voice, settings.speed);
-
-      // 🔹 (5) 오디오 위치와 visemeQueue의 audio_offset_ms를 맞추는 타이머
-      final timer =
-          Timer.periodic(const Duration(milliseconds: 20), (timer) async {
-        final position = await audioPlayer.getCurrentPosition(); // Duration
-        final posMs = position?.inMilliseconds ?? 0;
-
-        // visemeQueue에서 audio_offset_ms <= 현재 재생 위치인 것들을 순서대로 처리
-        while (visemeQueue.isNotEmpty &&
-            (visemeQueue.first['audio_offset_ms'] as int) <= posMs) {
-          final viseme = visemeQueue.removeAt(0);
-          setState(() {
-            _currentVisemeId = viseme['viseme_id'] as int;
-          });
-        }
-
-        // 오디오 종료 시
-        if (audioPlayer.state == PlayerState.completed) {
-          timer.cancel();
-          setState(() {
-            _currentVisemeId = 0; // neutral
-          });
-        }
-      });
-
-      // 🔹 (6) 오디오 재생이 끝날 때까지 대기
-      await audioPlayer.onPlayerComplete.first;
-
-      // 리소스 정리
-      timer.cancel();
-      await visemeSub.cancel();
-      await audioPlayer.stop();
+      _startLipSyncTimer();
     } catch (e) {
+      await _stopTtsPlayback();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             content: Text('TTS 오류: $e'), duration: const Duration(seconds: 2)),
       );
-    } finally {
+    }
+  }
+
+  Future<void> _resumeTtsPlayback() async {
+    final player = _ttsAudioPlayer;
+    if (player == null) {
+      return;
+    }
+    try {
+      await player.resume();
+      _startLipSyncTimer();
+      if (mounted) {
+        setState(() {
+          _isPlaying = true;
+          _isPaused = false;
+        });
+      } else {
+        _isPlaying = true;
+        _isPaused = false;
+      }
+    } catch (e) {
+      await _stopTtsPlayback();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('TTS 오류: $e'), duration: const Duration(seconds: 2)),
+      );
+    }
+  }
+
+  Future<void> _pauseTtsPlayback() async {
+    final player = _ttsAudioPlayer;
+    if (player == null) {
+      return;
+    }
+    await player.pause();
+    _lipSyncTimer?.cancel();
+    _lipSyncTimer = null;
+    if (mounted) {
+      setState(() {
+        _isPlaying = false;
+        _isPaused = true;
+      });
+    } else {
+      _isPlaying = false;
+      _isPaused = true;
+    }
+  }
+
+  Future<void> _stopTtsPlayback({bool resetState = true}) async {
+    _lipSyncTimer?.cancel();
+    _lipSyncTimer = null;
+    _visemeQueue.clear();
+    await _visemeStreamSubscription?.cancel();
+    _visemeStreamSubscription = null;
+    await _ttsCompletionSubscription?.cancel();
+    _ttsCompletionSubscription = null;
+    if (_ttsAudioPlayer != null) {
+      await _ttsAudioPlayer!.stop();
+    }
+    _isPaused = false;
+    if (resetState && mounted) {
       setState(() {
         _isTtsPlaying = false;
         _isPlaying = false;
-        _currentVisemeId = 0; // TTS 종료 시 neutral
+        _currentVisemeId = 0;
+        _isPaused = false;
       });
+    } else {
+      _isTtsPlaying = false;
+      _isPlaying = false;
+      _currentVisemeId = 0;
+      _isPaused = false;
     }
+  }
+
+  Future<void> _handleTtsPlaybackCompleted() async {
+    await _stopTtsPlayback();
+  }
+
+  void _startLipSyncTimer() {
+    _lipSyncTimer?.cancel();
+    _lipSyncTimer = Timer.periodic(const Duration(milliseconds: 20),
+        (timer) async {
+      final activePlayer = _ttsAudioPlayer;
+      if (activePlayer == null) {
+        timer.cancel();
+        return;
+      }
+      final position = await activePlayer.getCurrentPosition();
+      final posMs = position?.inMilliseconds ?? 0;
+
+      while (_visemeQueue.isNotEmpty) {
+        final current = _visemeQueue.first;
+        final rawOffset = current['audio_offset_ms'];
+        final offsetMs = rawOffset is num
+            ? rawOffset.toInt()
+            : int.tryParse('$rawOffset') ?? 0;
+        if (offsetMs > posMs) {
+          break;
+        }
+        _visemeQueue.removeAt(0);
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        setState(() {
+          _currentVisemeId = (current['viseme_id'] as num?)?.toInt() ?? 0;
+        });
+      }
+    });
   }
 
 /*
@@ -615,15 +759,16 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
 */
 
   Future<void> _stopAllAudio() async {
-    _isTtsPlaying = false;
+    await _stopTtsPlayback();
     await _audioPlayerService.stop();
-    setState(() {
-      _isPlaying = false;
-    });
   }
 
   @override
   void dispose() {
+    _lipSyncTimer?.cancel();
+    _visemeStreamSubscription?.cancel();
+    _ttsCompletionSubscription?.cancel();
+    _ttsAudioPlayer?.dispose();
     _visemeService?.dispose();
     super.dispose();
   }

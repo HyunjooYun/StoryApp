@@ -12,22 +12,39 @@ class VisemeEventService {
     channel.stream.listen((event) {
       final data = jsonDecode(event);
       if (data['type'] == 'viseme') {
+        final audioOffset = data['audio_offset_ms'] ?? data['audio_offset'];
         _controller.add({
+          'type': 'viseme',
           'viseme_id': data['viseme_id'],
-          'audio_offset': data['audio_offset'],
+          'audio_offset_ms': audioOffset,
         });
       } else if (data['type'] == 'audio') {
-        _controller.add({'audio_path': data['path']});
+        _controller.add({'type': 'audio', 'audio_path': data['path']});
       } else if (data['type'] == 'error') {
-        _controller.add({'error': data['message']});
+        _controller.add({
+          'type': 'error',
+          'error': data['message'],
+          'message': data['message'],
+        });
       }
     });
   }
 
-  void sendTTSRequest(String text, String voice) {
+  void sendTTSRequest({
+    required String text,
+    required String voice,
+    double? speakingRate,
+  }) {
     print(
-        '[VisemeEventService] sendTTSRequest called: text=$text, voice=$voice');
-    channel.sink.add(jsonEncode({"text": text, "voice": voice}));
+        '[VisemeEventService] sendTTSRequest called: text=$text, voice=$voice, speakingRate=$speakingRate');
+    final Map<String, dynamic> payload = {
+      'text': text,
+      'voice': voice,
+    };
+    if (speakingRate != null) {
+      payload['speaking_rate'] = speakingRate;
+    }
+    channel.sink.add(jsonEncode(payload));
   }
 
   Stream<Map<String, dynamic>> get events => _controller.stream;

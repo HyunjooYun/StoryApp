@@ -1,15 +1,15 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/voice_config.dart';
-import 'package:flutter/services.dart' show rootBundle;
 
 class AzureTTSService {
   static final AzureTTSService _instance = AzureTTSService._internal();
   factory AzureTTSService() => _instance;
   AzureTTSService._internal();
+
+  static const double _speechRateMultiplier = 1.5;
 
   late final String _apiKey;
   late final String _region;
@@ -73,11 +73,14 @@ class AzureTTSService {
       String usedRate;
       double? rateValue;
       if (speed != null) {
-        rateValue = speed;
+        rateValue = _applySpeechRateMultiplier(speed);
       } else if (finalRate.contains('.') && double.tryParse(finalRate) != null) {
-        rateValue = double.parse(finalRate);
+        rateValue = _applySpeechRateMultiplier(double.parse(finalRate));
       } else {
-        rateValue = double.tryParse(finalRate);
+        final parsedRate = double.tryParse(finalRate);
+        rateValue = parsedRate != null
+            ? _applySpeechRateMultiplier(parsedRate)
+            : null;
       }
       if (rateValue != null) {
         if (rateValue <= 0.5) {
@@ -117,8 +120,11 @@ class AzureTTSService {
       }
 
       // 로그 추가: 실제 적용되는 속도 정보 출력
+      final effectiveRateLog = rateValue != null ? rateValue.toStringAsFixed(2) : 'n/a';
       print('[AzureTTS] Requested speed param: '
-        '[36m$speed[0m, config rate: [33m$finalRate[0m, usedRate (SSML): [32m$usedRate[0m');
+          '\x1B[36m$speed\x1B[0m, config rate: \x1B[33m$finalRate\x1B[0m, '
+          'effective rate: \x1B[35m$effectiveRateLog\x1B[0m, usedRate (SSML): '
+          '\x1B[32m$usedRate\x1B[0m');
       if (pitch != null) {
         // Azure expects pitch as percent difference from default (1.0 = 0%)
         double diff = (pitch - 1.0) * 100;
@@ -139,9 +145,9 @@ class AzureTTSService {
       print('AzureTTS generateAudio params:');
       print('  voiceName: $voiceName');
       print('  text: $text');
-  print('  rate: $usedRate');
-  print('  pitch: $usedPitch');
-  final ssml = _createSSML_raw(text, voiceName, usedRate, usedPitch);
+      print('  rate: $usedRate');
+      print('  pitch: $usedPitch');
+      final ssml = _createSSML_raw(text, voiceName, usedRate, usedPitch);
       print('AzureTTS SSML: $ssml');
       final uri = Uri.parse(_endpoint);
       final req = http.Request('POST', uri)
@@ -186,6 +192,16 @@ class AzureTTSService {
     }
   }
 
+  /// Resolve the Azure neural voice name for given language/gender settings.
+  String resolveVoiceName(String language, String? characterGender) {
+    return _getVoiceName(language, characterGender);
+  }
+
+  /// Apply speech-rate boost so other components can stay in sync.
+  double applySpeechRateMultiplier(double baseRate) {
+    return _applySpeechRateMultiplier(baseRate);
+  }
+
   /// Get voice name based on language and gender
   String _getVoiceName(String language, String? gender) {
     final isFemale = gender?.toLowerCase() == 'female' || gender == '여자';
@@ -221,28 +237,21 @@ class AzureTTSService {
     return '''<speak version='1.0' xml:lang='$lang'>
   <voice name='$voiceName'>
     <prosody rate='$rate' pitch='$pitch'>
-      $text
+      $safeText
     </prosody>
   </voice>
 </speak>''';
   }
 
-  /// Save audio file to local storage
-  Future<String> _saveAudioFile(List<int> audioBytes) async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final audioDir = Directory('${directory.path}/audio');
-      if (!await audioDir.exists()) {
-        await audioDir.create(recursive: true);
-      }
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final filePath = '${audioDir.path}/tts_$timestamp.mp3';
-      final file = File(filePath);
-      await file.writeAsBytes(audioBytes);
-      return filePath;
-    } catch (e) {
-      throw Exception('Failed to save audio file: $e');
+  double _applySpeechRateMultiplier(double baseRate) {
+    final scaled = baseRate * _speechRateMultiplier;
+    if (scaled < 0.1) {
+      return 0.1;
     }
+    if (scaled > 2.5) {
+      return 2.5;
+    }
+    return scaled;
   }
 
   /// Generate audio for multiple text segments
