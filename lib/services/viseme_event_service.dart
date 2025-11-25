@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
 import 'dart:async';
@@ -13,14 +14,18 @@ class VisemeEventService {
       final data = jsonDecode(event);
       if (data['type'] == 'viseme') {
         final audioOffset = data['audio_offset_ms'] ?? data['audio_offset'];
+        // Debug log to confirm viseme payload throughput from Azure
+        debugPrint('[VisemeEventService] viseme id=${data['viseme_id']} offsetMs=$audioOffset');
         _controller.add({
           'type': 'viseme',
           'viseme_id': data['viseme_id'],
           'audio_offset_ms': audioOffset,
         });
       } else if (data['type'] == 'audio') {
+        debugPrint('[VisemeEventService] audio payload path=${data['path']}');
         _controller.add({'type': 'audio', 'audio_path': data['path']});
       } else if (data['type'] == 'error') {
+        debugPrint('[VisemeEventService] error=${data['message']}');
         _controller.add({
           'type': 'error',
           'error': data['message'],

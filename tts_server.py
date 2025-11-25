@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
@@ -11,6 +12,11 @@ AZURE_TTS_KEY = os.getenv("AZURE_TTS_KEY")
 AZURE_TTS_REGION = os.getenv("AZURE_TTS_REGION")
 
 app = FastAPI()
+
+logger = logging.getLogger("tts_server")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
 
 
 class _NullAudioOutputStream(speechsdk.audio.PushAudioOutputStreamCallback):
@@ -39,6 +45,13 @@ async def tts_ws(websocket: WebSocket):
         text = data.get("text", "")
         voice = data.get("voice", "ko-KR-HyunsuNeural")
         speaking_rate = float(data.get("speaking_rate", 1.0))
+
+        logger.info(
+            "Received TTS request | voice=%s speaking_rate=%.2f chars=%d",
+            voice,
+            speaking_rate,
+            len(text),
+        )
 
         if not text:
             await websocket.send_json({"type": "error", "message": "text is empty"})
@@ -107,6 +120,11 @@ async def tts_ws(websocket: WebSocket):
         # 3) viseme 콜백: viseme_id + audio_offset_ms 를 Flutter로 송신
         def viseme_callback(evt: speechsdk.SpeechSynthesisVisemeEventArgs):
             audio_offset_ms = int(evt.audio_offset / 10000)  # 100ns → ms
+            logger.info(
+                "Viseme event | viseme_id=%s offset_ms=%d",
+                evt.viseme_id,
+                audio_offset_ms,
+            )
             # 비동기로 WebSocket 전송
             asyncio.run_coroutine_threadsafe(
                 websocket.send_json(
@@ -131,11 +149,14 @@ async def tts_ws(websocket: WebSocket):
                     "message": f"TTS failed: {result.reason}",
                 }
             )
+            logger.error("Synthesis failed | reason=%s", result.reason)
         else:
             # 모든 viseme 전송이 끝났음을 알림
             await websocket.send_json({"type": "done"})
+            logger.info("Synthesis completed successfully")
 
     except Exception as e:
+        logger.exception("TTS websocket error: %s", e)
         await websocket.send_json({"type": "error", "message": str(e)})
     finally:
         await websocket.close()
