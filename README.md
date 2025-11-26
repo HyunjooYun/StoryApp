@@ -66,6 +66,34 @@ AI 기반 스크립트 생성, 번역, TTS(음성합성), 2D 캐릭터 애니메
 - Azure Speech TTS API, FastAPI(백엔드, 선택)
 - 2D 캐릭터/이미지: Flame, Rive, PNG 스프라이트
 
+## Azure Viseme 매핑
+Azure Speech SDK가 전달하는 `viseme_id`는 앱의 표정 이미지 인덱스로 다음과 같이 매핑됩니다.
+
+| Azure viseme_id | 대표 발음 | 앱 viseme | 이미지 파일 |
+| - | - | - | - |
+| 0 | Silence | 0 (Neutral) | `viseme_00_neutral.png` |
+| 1 | ae/ax/ah | 5 (AH) | `viseme_05_ah.png` |
+| 2 | aa | 4 (AA) | `viseme_04_aa.png` |
+| 3 | ao | 6 (AO) | `viseme_06_ao.png` |
+| 4 | ey/eh/uh | 3 (EH) | `viseme_03_eh.png` |
+| 5 | er | 11 (LR) | `viseme_11_lr.png` |
+| 6 | iy/ih | 2 (AI) | `viseme_02_ai.png` |
+| 7 | uw/w | 7 (UW) | `viseme_07_uw.png` |
+| 8 | ow | 6 (AO) | `viseme_06_ao.png` |
+| 9 | aw | 8 (OY) | `viseme_08_oy.png` |
+| 10 | oy | 8 (OY) | `viseme_08_oy.png` |
+| 11 | ay | 2 (AI) | `viseme_02_ai.png` |
+| 12 | h | 0 (Neutral) | `viseme_00_neutral.png` |
+| 13 | r | 11 (LR) | `viseme_11_lr.png` |
+| 14 | l | 11 (LR) | `viseme_11_lr.png` |
+| 15 | s/z | 9 (SZ) | `viseme_09_sz.png` |
+| 16 | sh/ch | 10 (CH) | `viseme_10_ch.png` |
+| 17 | th/dh | 9 (SZ) | `viseme_09_sz.png` |
+| 18 | f/v | 12 (FV) | `viseme_12_fv.png` |
+| 19 | d/t/n | 1 (BMP) | `viseme_01_bmp.png` |
+| 20 | k/g/ng | 9 (SZ) | `viseme_09_sz.png` |
+| 21 | p/b/m | 1 (BMP) | `viseme_01_bmp.png` |
+
 ## 개발/테스트 환경
 - 권장 Flutter 3.x, Dart 3.x, Android Studio/VSCode
 - Android 10+ 실기기(갤럭시 탭 등) 및 에뮬레이터 테스트
