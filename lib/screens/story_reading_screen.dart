@@ -35,6 +35,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   StreamSubscription<Duration>? _ttsPositionSubscription;
   final List<Map<String, dynamic>> _visemeQueue = [];
   bool _isPaused = false;
+  Timer? _positionPollTimer;
 
   @override
   void initState() {
@@ -665,6 +666,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     _ttsStateSubscription = null;
     await _ttsPositionSubscription?.cancel();
     _ttsPositionSubscription = null;
+    _cancelPositionPoller();
     if (_ttsAudioPlayer != null) {
       await _ttsAudioPlayer!.stop();
     }
@@ -688,35 +690,71 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     await _stopTtsPlayback();
   }
 
-  void _attachPositionListener(AudioPlayer player) {
-    _ttsPositionSubscription?.cancel();
-    _ttsPositionSubscription =
-        player.onPositionChanged.listen((Duration position) {
-      final posMs = position.inMilliseconds;
+  void _cancelPositionPoller() {
+    _positionPollTimer?.cancel();
+    _positionPollTimer = null;
+  }
 
-      while (_visemeQueue.isNotEmpty) {
-        final current = _visemeQueue.first;
-        final rawOffset = current['audio_offset_ms'];
-        final offsetMs = rawOffset is num
-            ? rawOffset.toInt()
-            : int.tryParse('$rawOffset') ?? 0;
-        if (offsetMs > posMs) {
-          break;
-        }
-        _visemeQueue.removeAt(0);
-        if (!mounted) {
+  void _processVisemeQueue(int posMs, {required String source}) {
+    if (_visemeQueue.isEmpty) {
+      // 빈 큐 상태를 추적하기 위해 소스별로 로그를 남긴다.
+      debugPrint('[VisemeCheck:$source] posMs=$posMs queue=0');
+      return;
+    }
+    debugPrint(
+      '[VisemeCheck:$source] posMs=$posMs queue=${_visemeQueue.length}',
+    );
+    while (_visemeQueue.isNotEmpty) {
+      final current = _visemeQueue.first;
+      final rawOffset = current['audio_offset_ms'];
+      final offsetMs = rawOffset is num
+          ? rawOffset.toInt()
+          : int.tryParse('$rawOffset') ?? 0;
+      if (offsetMs > posMs) {
+        break;
+      }
+      _visemeQueue.removeAt(0);
+      if (!mounted) {
+        return;
+      }
+      final resolvedViseme = (current['viseme_id'] as num?)?.toInt() ?? 0;
+      final rawViseme = (current['raw_viseme_id'] as num?)?.toInt();
+      debugPrint(
+        '[VisemeApply:$source] posMs=$posMs raw=${rawViseme ?? 'unknown'} mapped=$resolvedViseme asset=${visemeFileMap[resolvedViseme]}',
+      );
+      setState(() {
+        _currentVisemeId = resolvedViseme;
+      });
+    }
+  }
+
+  void _startPositionPoller(AudioPlayer player) {
+    _cancelPositionPoller();
+    _positionPollTimer =
+        Timer.periodic(const Duration(milliseconds: 40), (Timer timer) {
+      player.getCurrentPosition().then((position) {
+        if (!mounted || position == null) {
           return;
         }
-        final resolvedViseme = (current['viseme_id'] as num?)?.toInt() ?? 0;
-        final rawViseme = (current['raw_viseme_id'] as num?)?.toInt();
-        debugPrint(
-          '[VisemeApply] posMs=$posMs raw=${rawViseme ?? 'unknown'} mapped=$resolvedViseme asset=${visemeFileMap[resolvedViseme]}',
-        );
-        setState(() {
-          _currentVisemeId = resolvedViseme;
-        });
-      }
+        _processVisemeQueue(position.inMilliseconds, source: 'poller');
+      }).catchError((error) {
+        debugPrint('[VisemePoller] getCurrentPosition error=$error');
+      });
     });
+  }
+
+  void _attachPositionListener(AudioPlayer player) {
+    _ttsPositionSubscription?.cancel();
+    debugPrint('[VisemePosition] attaching position listener');
+    _ttsPositionSubscription =
+        player.onPositionChanged.listen((Duration position) {
+      if (!mounted) {
+        return;
+      }
+      final posMs = position.inMilliseconds;
+      _processVisemeQueue(posMs, source: 'stream');
+    });
+    _startPositionPoller(player);
   }
 
 /*
@@ -787,6 +825,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     _ttsCompletionSubscription?.cancel();
     _ttsStateSubscription?.cancel();
     _ttsPositionSubscription?.cancel();
+    _cancelPositionPoller();
     _ttsAudioPlayer?.dispose();
     _visemeService?.dispose();
     super.dispose();

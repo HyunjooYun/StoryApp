@@ -24,29 +24,39 @@ class VisemeEventService {
       _channel = WebSocketChannel.connect(Uri.parse(_url));
       _channel!.stream.listen(
         (event) {
+          debugPrint('[VisemeEventService] raw event: $event');
           final data = jsonDecode(event);
-          if (data['type'] == 'viseme') {
-            final audioOffset = data['audio_offset_ms'] ?? data['audio_offset'];
-            debugPrint(
-                '[VisemeEventService] viseme id=${data['viseme_id']} offsetMs=$audioOffset');
-            _controller.add({
-              'type': 'viseme',
-              'viseme_id': data['viseme_id'],
-              'audio_offset_ms': audioOffset,
-            });
-          } else if (data['type'] == 'audio') {
-            debugPrint('[VisemeEventService] audio payload path=${data['path']}');
-            _controller.add({'type': 'audio', 'audio_path': data['path']});
-          } else if (data['type'] == 'error') {
-            debugPrint('[VisemeEventService] error=${data['message']}');
-            _controller.add({
-              'type': 'error',
-              'error': data['message'],
-              'message': data['message'],
-            });
-          } else if (data['type'] == 'done') {
-            debugPrint('[VisemeEventService] synthesis done');
-            _controller.add({'type': 'done'});
+          final type = data['type'];
+          switch (type) {
+            case 'viseme':
+              final audioOffset = data['audio_offset_ms'] ?? data['audio_offset'];
+              debugPrint(
+                  '[VisemeEventService] viseme id=${data['viseme_id']} offsetMs=$audioOffset');
+              _controller.add({
+                'type': 'viseme',
+                'viseme_id': data['viseme_id'],
+                'audio_offset_ms': audioOffset,
+              });
+              break;
+            case 'audio':
+              debugPrint('[VisemeEventService] audio payload path=${data['path']}');
+              _controller.add({'type': 'audio', 'audio_path': data['path']});
+              break;
+            case 'error':
+              debugPrint('[VisemeEventService] error=${data['message']}');
+              _controller.add({
+                'type': 'error',
+                'error': data['message'],
+                'message': data['message'],
+              });
+              break;
+            case 'done':
+              debugPrint('[VisemeEventService] synthesis done');
+              _controller.add({'type': 'done'});
+              break;
+            default:
+              debugPrint('[VisemeEventService] unknown event: $data');
+              _controller.add({'type': 'unknown', 'payload': data});
           }
         },
         onDone: () {
