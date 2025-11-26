@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/story_provider.dart';
@@ -6,7 +8,6 @@ import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
 import '../services/viseme_event_service.dart';
 import '../services/azure_tts_service.dart';
-import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 
 class StoryReadingScreen extends StatefulWidget {
@@ -30,7 +31,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   AudioPlayer? _ttsAudioPlayer;
   StreamSubscription<Map<String, dynamic>>? _visemeStreamSubscription;
   StreamSubscription<void>? _ttsCompletionSubscription;
-  Timer? _lipSyncTimer;
+  StreamSubscription<PlayerState>? _ttsStateSubscription;
+  StreamSubscription<Duration>? _ttsPositionSubscription;
   final List<Map<String, dynamic>> _visemeQueue = [];
   bool _isPaused = false;
 
@@ -525,6 +527,10 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       _visemeQueue.clear();
       final audioPlayer = _ttsAudioPlayer ??= AudioPlayer();
       await audioPlayer.stop();
+      await _ttsStateSubscription?.cancel();
+      _ttsStateSubscription = audioPlayer.onPlayerStateChanged.listen((state) {
+        debugPrint('[AudioPlayer] state=$state');
+      });
       final mp3FilePath = await _azureTTSService.generateAudio(
         text: ttsText,
         language: settings.language,
@@ -534,6 +540,14 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         age: settings.age,
       );
 
+      try {
+        final file = File(mp3FilePath);
+        final exists = await file.exists();
+        final length = exists ? await file.length() : 0;
+        debugPrint('[TTS Playback] file=$mp3FilePath exists=$exists length=$length');
+      } catch (err) {
+        debugPrint('[TTS Playback] file stat failed: $err');
+      }
       final visemeService = _visemeService;
       if (visemeService != null) {
         await _visemeStreamSubscription?.cancel();
@@ -543,15 +557,22 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
             final mappedViseme = visemeFileMap.containsKey(rawViseme)
                 ? rawViseme
                 : (_azureVisemeToUniversal[rawViseme] ?? 0);
+            debugPrint(
+              '[VisemeQueue] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
+            );
             _visemeQueue.add({
               'viseme_id': mappedViseme,
               'audio_offset_ms': event['audio_offset_ms'] ?? 0,
+              'raw_viseme_id': rawViseme,
             });
             if (!visemeFileMap.containsKey(rawViseme) &&
                 !_azureVisemeToUniversal.containsKey(rawViseme)) {
               debugPrint(
                   'Unknown viseme id $rawViseme received. Defaulting to neutral.');
             }
+            debugPrint(
+              '[Viseme] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
+            );
           } else if (event['type'] == 'error') {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -575,14 +596,13 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       }
 
       await audioPlayer.play(DeviceFileSource(mp3FilePath));
+      _attachPositionListener(audioPlayer);
 
       await _ttsCompletionSubscription?.cancel();
       _ttsCompletionSubscription =
           audioPlayer.onPlayerComplete.listen((event) async {
         await _handleTtsPlaybackCompleted();
       });
-
-      _startLipSyncTimer();
     } catch (e) {
       await _stopTtsPlayback();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -599,7 +619,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     }
     try {
       await player.resume();
-      _startLipSyncTimer();
+      _attachPositionListener(player);
       if (mounted) {
         setState(() {
           _isPlaying = true;
@@ -624,8 +644,6 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       return;
     }
     await player.pause();
-    _lipSyncTimer?.cancel();
-    _lipSyncTimer = null;
     if (mounted) {
       setState(() {
         _isPlaying = false;
@@ -638,13 +656,15 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   }
 
   Future<void> _stopTtsPlayback({bool resetState = true}) async {
-    _lipSyncTimer?.cancel();
-    _lipSyncTimer = null;
     _visemeQueue.clear();
     await _visemeStreamSubscription?.cancel();
     _visemeStreamSubscription = null;
     await _ttsCompletionSubscription?.cancel();
     _ttsCompletionSubscription = null;
+    await _ttsStateSubscription?.cancel();
+    _ttsStateSubscription = null;
+    await _ttsPositionSubscription?.cancel();
+    _ttsPositionSubscription = null;
     if (_ttsAudioPlayer != null) {
       await _ttsAudioPlayer!.stop();
     }
@@ -668,17 +688,11 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     await _stopTtsPlayback();
   }
 
-  void _startLipSyncTimer() {
-    _lipSyncTimer?.cancel();
-    _lipSyncTimer = Timer.periodic(const Duration(milliseconds: 20),
-        (timer) async {
-      final activePlayer = _ttsAudioPlayer;
-      if (activePlayer == null) {
-        timer.cancel();
-        return;
-      }
-      final position = await activePlayer.getCurrentPosition();
-      final posMs = position?.inMilliseconds ?? 0;
+  void _attachPositionListener(AudioPlayer player) {
+    _ttsPositionSubscription?.cancel();
+    _ttsPositionSubscription =
+        player.onPositionChanged.listen((Duration position) {
+      final posMs = position.inMilliseconds;
 
       while (_visemeQueue.isNotEmpty) {
         final current = _visemeQueue.first;
@@ -691,11 +705,15 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         }
         _visemeQueue.removeAt(0);
         if (!mounted) {
-          timer.cancel();
           return;
         }
+        final resolvedViseme = (current['viseme_id'] as num?)?.toInt() ?? 0;
+        final rawViseme = (current['raw_viseme_id'] as num?)?.toInt();
+        debugPrint(
+          '[VisemeApply] posMs=$posMs raw=${rawViseme ?? 'unknown'} mapped=$resolvedViseme asset=${visemeFileMap[resolvedViseme]}',
+        );
         setState(() {
-          _currentVisemeId = (current['viseme_id'] as num?)?.toInt() ?? 0;
+          _currentVisemeId = resolvedViseme;
         });
       }
     });
@@ -765,9 +783,10 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
 
   @override
   void dispose() {
-    _lipSyncTimer?.cancel();
     _visemeStreamSubscription?.cancel();
     _ttsCompletionSubscription?.cancel();
+    _ttsStateSubscription?.cancel();
+    _ttsPositionSubscription?.cancel();
     _ttsAudioPlayer?.dispose();
     _visemeService?.dispose();
     super.dispose();

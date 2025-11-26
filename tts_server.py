@@ -1,10 +1,13 @@
 import os
 import asyncio
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
 import azure.cognitiveservices.speech as speechsdk
+from starlette.websockets import WebSocketDisconnect
 
 load_dotenv()
 
@@ -15,7 +18,22 @@ app = FastAPI()
 
 logger = logging.getLogger("tts_server")
 if not logger.handlers:
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    logger.setLevel(logging.INFO)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    logger.addHandler(console_handler)
+
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"tts_server_{datetime.now():%Y%m%d}.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    )
+    logger.addHandler(file_handler)
+
+    logger.propagate = False
 
 
 
@@ -54,7 +72,10 @@ async def tts_ws(websocket: WebSocket):
         )
 
         if not text:
-            await websocket.send_json({"type": "error", "message": "text is empty"})
+            try:
+                await websocket.send_json({"type": "error", "message": "text is empty"})
+            except WebSocketDisconnect:
+                logger.info("Client disconnected before empty-text notice")
             await websocket.close()
             return
 
@@ -143,23 +164,36 @@ async def tts_ws(websocket: WebSocket):
         result = synthesizer.speak_ssml_async(ssml).get()
 
         if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"TTS failed: {result.reason}",
-                }
-            )
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": f"TTS failed: {result.reason}",
+                    }
+                )
+            except WebSocketDisconnect:
+                logger.info("Client disconnected before error delivery")
             logger.error("Synthesis failed | reason=%s", result.reason)
         else:
-            # 모든 viseme 전송이 끝났음을 알림
-            await websocket.send_json({"type": "done"})
-            logger.info("Synthesis completed successfully")
-
+            try:
+                # 모든 viseme 전송이 끝났음을 알림
+                await websocket.send_json({"type": "done"})
+                logger.info("Synthesis completed successfully")
+            except WebSocketDisconnect:
+                logger.info("Client disconnected before completion")
+    except WebSocketDisconnect:
+        logger.info("Client disconnected")
     except Exception as e:
         logger.exception("TTS websocket error: %s", e)
-        await websocket.send_json({"type": "error", "message": str(e)})
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except WebSocketDisconnect:
+            logger.debug("Client disconnected while sending error message")
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 
