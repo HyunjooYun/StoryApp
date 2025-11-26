@@ -14,6 +14,13 @@
 ## [최근 업데이트 내역]
 
 
+### 2025-11-27
+- Flutter 앱에서 viseme 큐가 비어 있는 문제 재현 후 서버/클라이언트 로그 수집
+- FastAPI `tts_server.py`의 viseme 전송 로직을 Future 집합과 락으로 보호하도록 재작성하여 WebSocket 종료 이후에도 이벤트가 누락되지 않도록 수정
+- `done` 메시지 전송 전에 대기 중인 viseme 작업을 모두 소모하도록 `_drain_pending_visemes()` 구현, 전송 실패 로그를 정리해 노이즈 제거
+- 앱 재실행으로 viseme 이벤트 정상 수신 및 립싱크 이미지 전환 확인(소폭 딜레이는 존재, 추후 튜닝 예정)
+
+
 ### 2025-11-25
 - Azure Speech SDK 버전 확인(1.47.0) 및 Conda 기반 환경으로 viseme FastAPI 서버 재구동 작업 수행
 - 8000 포트 점유 프로세스(PID 19724) 정리 후 `conda run python -m uvicorn` 조합으로 서버 정상 기동 확인

@@ -1,13 +1,16 @@
 import os
 import asyncio
 import logging
+from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
+from typing import Set
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
 import azure.cognitiveservices.speech as speechsdk
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 load_dotenv()
 
@@ -56,6 +59,21 @@ async def tts_ws(websocket: WebSocket):
     - 오디오는 파일로 저장하지 않고, default speaker도 사용하지 않는다.
     """
     await websocket.accept()
+
+    pending_viseme_futures: Set[Future] = set()
+    pending_viseme_lock = Lock()
+    loop = asyncio.get_running_loop()
+
+    async def _drain_pending_visemes() -> None:
+        while True:
+            with pending_viseme_lock:
+                if not pending_viseme_futures:
+                    break
+                futures_snapshot = list(pending_viseme_futures)
+            await asyncio.gather(
+                *(asyncio.wrap_future(fut, loop=loop) for fut in futures_snapshot),
+                return_exceptions=True,
+            )
 
     try:
         # 1) Flutter에서 요청 파라미터 받기
@@ -136,7 +154,24 @@ async def tts_ws(websocket: WebSocket):
 </speak>
 """.strip()
 
-        loop = asyncio.get_running_loop()
+        async def _send_viseme(payload: dict) -> None:
+            try:
+                if websocket.application_state == WebSocketState.DISCONNECTED:
+                    logger.info(
+                        "Skipping viseme send; websocket already disconnected",
+                    )
+                    return
+                await websocket.send_json(payload)
+            except WebSocketDisconnect:
+                logger.info("Client disconnected before viseme delivery")
+            except RuntimeError as exc:
+                message = str(exc)
+                if "Cannot call \"send\" once a close message has been sent" in message:
+                    logger.debug("Viseme send skipped after close signal")
+                else:  # pragma: no cover - unexpected runtime error
+                    logger.exception("Failed to send viseme payload: %s", exc)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Failed to send viseme payload: %s", exc)
 
         # 3) viseme 콜백: viseme_id + audio_offset_ms 를 Flutter로 송신
         def viseme_callback(evt: speechsdk.SpeechSynthesisVisemeEventArgs):
@@ -146,22 +181,27 @@ async def tts_ws(websocket: WebSocket):
                 evt.viseme_id,
                 audio_offset_ms,
             )
-            # 비동기로 WebSocket 전송
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json(
-                    {
-                        "type": "viseme",
-                        "viseme_id": evt.viseme_id,
-                        "audio_offset_ms": audio_offset_ms,
-                    }
-                ),
-                loop,
-            )
+            payload = {
+                "type": "viseme",
+                "viseme_id": evt.viseme_id,
+                "audio_offset_ms": audio_offset_ms,
+            }
+            future = asyncio.run_coroutine_threadsafe(_send_viseme(payload), loop)
+
+            def _cleanup(fut: Future) -> None:
+                with pending_viseme_lock:
+                    pending_viseme_futures.discard(fut)
+
+            with pending_viseme_lock:
+                pending_viseme_futures.add(future)
+            future.add_done_callback(_cleanup)
 
         synthesizer.viseme_received.connect(viseme_callback)
 
         # 4) 실제 합성 실행 (오디오는 폐기, viseme 이벤트만 사용)
         result = synthesizer.speak_ssml_async(ssml).get()
+
+        await _drain_pending_visemes()
 
         if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
             try:
@@ -190,6 +230,7 @@ async def tts_ws(websocket: WebSocket):
         except WebSocketDisconnect:
             logger.debug("Client disconnected while sending error message")
     finally:
+        await _drain_pending_visemes()
         try:
             await websocket.close()
         except Exception:
