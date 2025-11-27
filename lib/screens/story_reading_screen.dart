@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import '../providers/story_provider.dart';
 import '../models/story.dart';
@@ -8,6 +10,7 @@ import 'settings_screen.dart';
 import '../services/audio_player_service.dart';
 import '../services/viseme_event_service.dart';
 import '../services/azure_tts_service.dart';
+import '../services/emotion_analysis_service.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 class StoryReadingScreen extends StatefulWidget {
@@ -36,45 +39,41 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   final List<Map<String, dynamic>> _visemeQueue = [];
   bool _isPaused = false;
   Timer? _positionPollTimer;
+  Timer? _eyeBlinkTimer;
+  Timer? _eyeBlinkInitialTimer;
+  final List<Timer> _eyeFrameTimers = [];
+  String? _currentEyeAsset;
+  String? _activeEyeGender;
+  final EmotionAnalysisService _emotionAnalysisService = EmotionAnalysisService();
+  List<_EmotionPlan> _emotionPlans = [];
+  List<_EmotionSegment> _pendingEmotionSegments = [];
+  bool _emotionSegmentsScheduled = false;
+  bool _isEmotionActive = false;
+  _EmotionSegment? _currentEmotionSegment;
+  _EmotionSegment? _delayedEmotionSegment;
+  int _lastKnownAudioPositionMs = 0;
+  StreamSubscription<Duration>? _ttsDurationSubscription;
+  static const String _defaultVisemeSocketUrl = 'ws://127.0.0.1:8000/ws/tts';
 
-  @override
-  void initState() {
-    super.initState();
-    final initialContent = widget.story.adaptedScript ?? widget.story.content;
-    _pages = [initialContent];
-    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
-    _currentVisemeId = 0; // neutral
+  static const String _mhEyeBasePath = 'assets/images/MH_eye/';
+  static const String _mhEyeNatural = '${_mhEyeBasePath}eye_00_natural.png';
+  static const String _mhEyeHalf = '${_mhEyeBasePath}eye_01_half.png';
+  static const String _mhEyeClosed = '${_mhEyeBasePath}eye_02_closed.png';
+  static const String _mhEyeWorry = '${_mhEyeBasePath}eye_03_worry.png';
+  static const String _mhEyeSurprised = '${_mhEyeBasePath}eye_04_surprised.png';
+  static const String _mhEyeMoved = '${_mhEyeBasePath}eye_05_moved.png';
+  static const double _mhEyeBaseX = 323;
+  static const double _mhEyeBaseY = 248;
+  static const double _mhEyeBaseWidth = 319;
+  static const double _mhEyeBaseHeight = 169;
+  bool _isEyeBlinking = false;
+  static const int _emotionDisplayDurationMs = 2000;
+  static const int _emotionGraceMs = 250;
+  static const String _mhEndingOverlay = 'assets/images/MH_ending.png';
+  bool _showEndingOverlay = false;
 
-    // WebSocket 연결만 여기서 해둔다. (이 시점에서는 이벤트 listen 안 함)
-    _visemeService =
-        VisemeEventService("ws://192.168.0.10:8000/ws/tts"); // 서버 주소에 맞게 변경
-  }
-
-/*
-  @override
-  void initState() {
-    super.initState();
-    final initialContent = widget.story.adaptedScript ?? widget.story.content;
-    _pages = [initialContent];
-    _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
-    _currentVisemeId = 0; // neutral
-    _visemeService = VisemeEventService("ws://192.168.0.10:8000/ws/tts"); // 서버 주소에 맞게 변경
-    _visemeService!.events.listen((event) {
-      if (event.containsKey('viseme_id')) {
-        setState(() {
-          _currentVisemeId = event['viseme_id'] ?? 0;
-        });
-      }
-      if (event.containsKey('error')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('TTS 오류: ${event['error']}'), duration: const Duration(seconds: 2)),
-        );
-      }
-    });
-  }
-*/
-
-  // viseme 이미지 파일명 매핑 (viseme.md 참조)
+  bool get _canRenderEyeAsset => _activeEyeGender == 'male';
+  bool get _shouldShowEndingOverlay => _showEndingOverlay && _canRenderEyeAsset;
   static const Map<int, String> visemeFileMap = {
     0: 'viseme_00_neutral.png',
     1: 'viseme_01_bmp.png',
@@ -136,31 +135,172 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         .toList();
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _initializeVisemeService();
+  }
+
+  void _initializeVisemeService() {
+    final socketUrl = _resolveVisemeSocketUrl();
+    try {
+      _visemeService = VisemeEventService(socketUrl);
+      debugPrint('[StoryReading] Viseme socket initialized: $socketUrl');
+    } catch (error) {
+      debugPrint('[StoryReading] Failed to initialize viseme socket: $error');
+      _visemeService = null;
+    }
+  }
+
+  String _resolveVisemeSocketUrl() {
+    final envCandidates = <String?>[
+      dotenv.env['VISEME_WEBSOCKET_URL'],
+      dotenv.env['VISEME_SOCKET_URL'],
+      dotenv.env['VISME_WEBSOCKET_URL'],
+      dotenv.env['TTS_WEBSOCKET_URL'],
+      dotenv.env['TTS_SOCKET_URL'],
+    ];
+    final resolvedFromEnv = envCandidates
+        .firstWhere((value) => value != null && value.trim().isNotEmpty, orElse: () => null);
+    if (resolvedFromEnv != null) {
+      return resolvedFromEnv.trim();
+    }
+    if (Platform.isAndroid) {
+      return 'ws://10.0.2.2:8000/ws/tts';
+    }
+    return _defaultVisemeSocketUrl;
+  }
+
   // 실제 텍스트 박스 크기에 맞춰 페이지네이션
   List<String> paginateTextByBox({
     required String text,
-    required double boxWidth,
-    required double boxHeight,
+    required double maxWidth,
+    required double maxHeight,
     required TextStyle style,
   }) {
-    final lines = text.split(RegExp(r'[\n\r]+')).map((s) => s.trim()).toList();
-    final List<String> pages = [];
-    String current = '';
-    for (int i = 0; i < lines.length; i++) {
-      final test = current.isEmpty ? lines[i] : current + '\n' + lines[i];
-      final tp = TextPainter(
-        text: TextSpan(text: test, style: style),
+    final normalized = text.replaceAll('\r\n', '\n');
+    final double effectiveWidth = math.max(1.0, maxWidth);
+    final double effectiveHeight =
+      math.max((style.fontSize ?? 14) * 1.2, maxHeight);
+
+    double measureHeight(String value) {
+      if (value.isEmpty) {
+        return 0;
+      }
+      final painter = TextPainter(
+        text: TextSpan(text: value, style: style),
         textDirection: TextDirection.ltr,
         maxLines: null,
-      )..layout(maxWidth: boxWidth);
-      if (tp.height > boxHeight && current.isNotEmpty) {
-        pages.add(current);
-        current = lines[i];
-      } else {
-        current = test;
+      )..layout(maxWidth: effectiveWidth);
+      return painter.height;
+    }
+
+    List<String> tokenize(String value) {
+      final regex = RegExp(r'(\s+)');
+      final tokens = <String>[];
+      int start = 0;
+      for (final match in regex.allMatches(value)) {
+        if (match.start > start) {
+          tokens.add(value.substring(start, match.start));
+        }
+        tokens.add(match.group(0)!);
+        start = match.end;
+      }
+      if (start < value.length) {
+        tokens.add(value.substring(start));
+      }
+      if (tokens.isEmpty) {
+        tokens.add(value);
+      }
+      return tokens;
+    }
+
+    void pushBuffer(StringBuffer buffer, List<String> pages) {
+      if (buffer.isEmpty) {
+        return;
+      }
+      final text = buffer.toString().trimRight();
+      if (text.isNotEmpty) {
+        pages.add(text);
+      }
+      buffer.clear();
+    }
+
+    void splitAndPush(
+      String token,
+      List<String> pages,
+    ) {
+      var remaining = token;
+      while (remaining.isNotEmpty) {
+        int low = 1;
+        int high = remaining.length;
+        int fit = 0;
+        while (low <= high) {
+          final mid = (low + high) ~/ 2;
+          final candidate = remaining.substring(0, mid);
+          if (measureHeight(candidate) <= effectiveHeight) {
+            fit = mid;
+            low = mid + 1;
+          } else {
+            high = mid - 1;
+          }
+        }
+        if (fit == 0) {
+          fit = 1;
+        }
+        final chunk = remaining.substring(0, fit);
+        final trimmedChunk = chunk.trimRight();
+        if (trimmedChunk.isNotEmpty) {
+          pages.add(trimmedChunk);
+        }
+        remaining = remaining.substring(fit);
       }
     }
-    if (current.isNotEmpty) pages.add(current);
+
+    final tokens = tokenize(normalized);
+    final pages = <String>[];
+    final buffer = StringBuffer();
+
+    for (final token in tokens) {
+      final tentative = buffer.isEmpty ? token : '${buffer.toString()}$token';
+      if (tentative.trim().isEmpty) {
+        buffer.write(token);
+        continue;
+      }
+      if (measureHeight(tentative) <= effectiveHeight) {
+        buffer.write(token);
+        continue;
+      }
+
+      if (buffer.isNotEmpty) {
+        pushBuffer(buffer, pages);
+        final trimmedToken = token.trimLeft();
+        if (trimmedToken.isEmpty) {
+          continue;
+        }
+        if (measureHeight(trimmedToken) <= effectiveHeight) {
+          buffer.write(trimmedToken);
+          continue;
+        }
+        splitAndPush(trimmedToken, pages);
+      } else {
+        final trimmedToken = token.trimLeft();
+        if (trimmedToken.isEmpty) {
+          continue;
+        }
+        if (measureHeight(trimmedToken) <= effectiveHeight) {
+          buffer.write(trimmedToken);
+        } else {
+          splitAndPush(trimmedToken, pages);
+        }
+      }
+    }
+
+    pushBuffer(buffer, pages);
+
+    if (pages.isEmpty) {
+      return <String>[normalized.trim()];
+    }
     return pages;
   }
 
@@ -178,10 +318,13 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     );
     // 페이지네이션 동적 적용
     final initialContent = widget.story.adaptedScript ?? widget.story.content;
+    const double textPadding = 24.0;
+    final innerWidth = math.max(1.0, boxWidth - textPadding * 2);
+    final innerHeight = math.max(1.0, boxHeight - textPadding * 2);
     _pages = paginateTextByBox(
       text: initialContent,
-      boxWidth: boxWidth,
-      boxHeight: boxHeight,
+      maxWidth: innerWidth,
+      maxHeight: innerHeight,
       style: textStyle,
     );
     if (_currentPage >= _pages.length) {
@@ -189,8 +332,6 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     }
     _currentPageSentences = _splitPageIntoSentences(_pages[_currentPage]);
 
-    final provider = Provider.of<StoryProvider>(context, listen: false);
-    final gender = provider.settings.gender;
     return Scaffold(
       backgroundColor: const Color(0xFF7665FF),
       body: Container(
@@ -238,6 +379,13 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
             // 메인 컨텐츠
             Consumer<StoryProvider>(
               builder: (context, provider, child) {
+                final gender = provider.settings.gender;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) {
+                    return;
+                  }
+                  _handleEyeBlinkingGender(gender);
+                });
                 // 미사용 screenWidth 변수 완전 제거
                 // 립싱크 애니메이션: 캐릭터 + viseme 이미지 스와핑
                 return SingleChildScrollView(
@@ -273,6 +421,34 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               ),
                             ),
                           ),
+                          if (_currentEyeAsset != null)
+                            Builder(
+                              builder: (context) {
+                                const double baseWidth = 1024;
+                                const double baseHeight = 1024;
+                                const double characterBoxWidth = 360;
+                                const double characterBoxHeight = 360;
+                                final double scaleX = characterBoxWidth / baseWidth;
+                                final double scaleY = characterBoxHeight / baseHeight;
+                                final double eyeX = _mhEyeBaseX * scaleX;
+                                final double eyeY = _mhEyeBaseY * scaleY;
+                                final double eyeWidth =
+                                    _mhEyeBaseWidth * scaleX;
+                                final double eyeHeight =
+                                    _mhEyeBaseHeight * scaleY;
+                                return Positioned(
+                                  left: eyeX,
+                                  top: eyeY,
+                                  child: Image.asset(
+                                    _currentEyeAsset!,
+                                    key: ValueKey<String>(_currentEyeAsset!),
+                                    width: eyeWidth,
+                                    height: eyeHeight,
+                                    fit: BoxFit.contain,
+                                  ),
+                                );
+                              },
+                            ),
                           // 립싱크 viseme 이미지 (스와핑)
                           // 캐릭터 박스 크기에 따라 viseme 위치 자동 조정
                           Builder(
@@ -323,6 +499,18 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                               );
                             },
                           ),
+                          if (_shouldShowEndingOverlay)
+                            Positioned.fill(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(20),
+                                child: IgnorePointer(
+                                  child: Image.asset(
+                                    _mhEndingOverlay,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 30),
@@ -378,6 +566,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                                     _currentPageSentences =
                                         _splitPageIntoSentences(
                                             _pages[_currentPage]);
+                                    _showEndingOverlay = false;
                                   });
                                 }
                               },
@@ -418,6 +607,7 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
                                     _currentPageSentences =
                                         _splitPageIntoSentences(
                                             _pages[_currentPage]);
+                                    _showEndingOverlay = false;
                                   });
                                 }
                               },
@@ -519,18 +709,33 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
 
     try {
       await _stopTtsPlayback(resetState: false);
+      _emotionPlans = _buildEmotionPlans(sentences);
+      _pendingEmotionSegments = [];
+      _currentEmotionSegment = null;
+      _delayedEmotionSegment = null;
+      _emotionSegmentsScheduled = false;
+      _isEmotionActive = false;
+      _lastKnownAudioPositionMs = 0;
       setState(() {
         _isTtsPlaying = true;
         _isPlaying = true;
         _isPaused = false;
         _currentVisemeId = 0;
+        _showEndingOverlay = false;
       });
       _visemeQueue.clear();
       final audioPlayer = _ttsAudioPlayer ??= AudioPlayer();
       await audioPlayer.stop();
       await _ttsStateSubscription?.cancel();
-      _ttsStateSubscription = audioPlayer.onPlayerStateChanged.listen((state) {
-        debugPrint('[AudioPlayer] state=$state');
+        _ttsStateSubscription = audioPlayer.onPlayerStateChanged.listen((state) {
+          debugPrint('[AudioPlayer] state=$state');
+        });
+      await _ttsDurationSubscription?.cancel();
+      _ttsDurationSubscription =
+          audioPlayer.onDurationChanged.listen((duration) {
+        if (duration.inMilliseconds > 0 && !_emotionSegmentsScheduled) {
+          _scheduleEmotionSegments(duration);
+        }
       });
       final mp3FilePath = await _azureTTSService.generateAudio(
         text: ttsText,
@@ -666,10 +871,13 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     _ttsStateSubscription = null;
     await _ttsPositionSubscription?.cancel();
     _ttsPositionSubscription = null;
+    await _ttsDurationSubscription?.cancel();
+    _ttsDurationSubscription = null;
     _cancelPositionPoller();
     if (_ttsAudioPlayer != null) {
       await _ttsAudioPlayer!.stop();
     }
+    _clearEmotionScheduling();
     _isPaused = false;
     if (resetState && mounted) {
       setState(() {
@@ -688,6 +896,14 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
 
   Future<void> _handleTtsPlaybackCompleted() async {
     await _stopTtsPlayback();
+    final isLastPage = _currentPage >= _pages.length - 1;
+    if (!mounted) {
+      _showEndingOverlay = isLastPage;
+      return;
+    }
+    setState(() {
+      _showEndingOverlay = isLastPage;
+    });
   }
 
   void _cancelPositionPoller() {
@@ -696,6 +912,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
   }
 
   void _processVisemeQueue(int posMs, {required String source}) {
+    _lastKnownAudioPositionMs = posMs;
+    _updateEmotionState(posMs);
     if (_visemeQueue.isEmpty) {
       // 빈 큐 상태를 추적하기 위해 소스별로 로그를 남긴다.
       debugPrint('[VisemeCheck:$source] posMs=$posMs queue=0');
@@ -755,6 +973,327 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       _processVisemeQueue(posMs, source: 'stream');
     });
     _startPositionPoller(player);
+    player.getDuration().then((duration) {
+      if (duration == null) {
+        return;
+      }
+      if (duration.inMilliseconds > 0 && !_emotionSegmentsScheduled) {
+        _scheduleEmotionSegments(duration);
+      }
+    }).catchError((error) {
+      debugPrint('[EmotionSchedule] getDuration error=$error');
+    });
+  }
+
+  void _handleEyeBlinkingGender(String gender) {
+    final normalized = gender.toLowerCase();
+    if (_activeEyeGender == normalized) {
+      return;
+    }
+    _activeEyeGender = normalized;
+    if (normalized == 'male') {
+      _startEyeBlinkLoop();
+    } else {
+      _stopEyeBlinkLoop();
+      if (mounted) {
+        setState(() {
+          _currentEyeAsset = null;
+        });
+      } else {
+        _currentEyeAsset = null;
+      }
+    }
+  }
+
+  void _startEyeBlinkLoop() {
+    _stopEyeBlinkLoop();
+    _currentEyeAsset = _mhEyeNatural;
+    if (mounted) {
+      setState(() {});
+    }
+    _eyeBlinkInitialTimer = Timer(const Duration(milliseconds: 4400), () {
+      if (!mounted) {
+        return;
+      }
+      _runEyeBlinkCycle();
+      _eyeBlinkTimer =
+          Timer.periodic(const Duration(seconds: 5), (Timer _) {
+        if (!mounted) {
+          return;
+        }
+        _runEyeBlinkCycle();
+      });
+    });
+  }
+
+  void _runEyeBlinkCycle() {
+    if (_isEmotionActive) {
+      return;
+    }
+    _isEyeBlinking = true;
+    _setEyeAsset(_mhEyeHalf);
+    _scheduleEyeFrame(const Duration(milliseconds: 200), _mhEyeClosed);
+    _scheduleEyeFrame(const Duration(milliseconds: 400), _mhEyeHalf);
+    _scheduleEyeFrame(
+      const Duration(milliseconds: 600),
+      _mhEyeNatural,
+      onComplete: _handleBlinkCompleted,
+    );
+  }
+
+  void _scheduleEyeFrame(Duration delay, String assetPath,
+      {VoidCallback? onComplete}) {
+    final timer = Timer(delay, () {
+      if (!mounted) {
+        return;
+      }
+      _setEyeAsset(assetPath);
+      onComplete?.call();
+    });
+    _eyeFrameTimers.add(timer);
+  }
+
+  void _handleBlinkCompleted() {
+    _isEyeBlinking = false;
+    _updateEmotionState(_lastKnownAudioPositionMs);
+  }
+
+  void _setEyeAsset(String assetPath) {
+    if (!_canRenderEyeAsset) {
+      if (_currentEyeAsset != null) {
+        if (mounted) {
+          setState(() {
+            _currentEyeAsset = null;
+          });
+        } else {
+          _currentEyeAsset = null;
+        }
+      }
+      return;
+    }
+    if (_currentEyeAsset == assetPath) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _currentEyeAsset = assetPath;
+      });
+    } else {
+      _currentEyeAsset = assetPath;
+    }
+  }
+
+  void _stopEyeBlinkLoop() {
+    for (final timer in _eyeFrameTimers) {
+      timer.cancel();
+    }
+    _eyeFrameTimers.clear();
+    _eyeBlinkInitialTimer?.cancel();
+    _eyeBlinkInitialTimer = null;
+    _eyeBlinkTimer?.cancel();
+    _eyeBlinkTimer = null;
+    _isEyeBlinking = false;
+  }
+
+  void _clearEmotionScheduling() {
+    _emotionPlans = [];
+    _pendingEmotionSegments = [];
+    _emotionSegmentsScheduled = false;
+    _isEmotionActive = false;
+    _currentEmotionSegment = null;
+    _delayedEmotionSegment = null;
+    _lastKnownAudioPositionMs = 0;
+    _showEndingOverlay = false;
+    if (_canRenderEyeAsset) {
+      _setEyeAsset(_mhEyeNatural);
+    }
+  }
+
+  List<_EmotionPlan> _buildEmotionPlans(List<String> sentences) {
+    final plans = <_EmotionPlan>[];
+    if (sentences.isEmpty) {
+      return plans;
+    }
+    final normalized = sentences
+        .map((sentence) => sentence.trim())
+        .where((sentence) => sentence.isNotEmpty)
+        .toList();
+    if (normalized.isEmpty) {
+      return plans;
+    }
+
+    final totalChars = normalized.fold<int>(
+      0,
+      (previousValue, sentence) => previousValue + sentence.runes.length,
+    );
+    if (totalChars == 0) {
+      return plans;
+    }
+
+    int processedChars = 0;
+    for (final sentence in normalized) {
+      final sentenceChars = sentence.runes.length;
+      final emotion = _emotionAnalysisService.analyze(sentence);
+      final double startRatio =
+          (processedChars / totalChars).clamp(0.0, 1.0).toDouble();
+      final double endRatio =
+          ((processedChars + sentenceChars) / totalChars)
+              .clamp(0.0, 1.0)
+              .toDouble();
+      if (emotion != null && sentenceChars > 0) {
+        plans.add(
+          _EmotionPlan(
+            type: emotion,
+            startRatio: startRatio,
+            endRatio: endRatio,
+          ),
+        );
+      }
+      processedChars += sentenceChars;
+    }
+    return plans;
+  }
+
+  void _scheduleEmotionSegments(Duration duration) {
+    if (_emotionPlans.isEmpty) {
+      _emotionSegmentsScheduled = true;
+      return;
+    }
+    final totalMs = duration.inMilliseconds;
+    if (totalMs <= 0) {
+      return;
+    }
+
+    final segments = <_EmotionSegment>[];
+    for (final plan in _emotionPlans) {
+      final startMs = (plan.startRatio * totalMs).round();
+      final endMs = math.min(totalMs, startMs + _emotionDisplayDurationMs);
+      if (endMs <= startMs) {
+        continue;
+      }
+      final asset = _emotionAssetForType(plan.type);
+      if (asset == null) {
+        continue;
+      }
+      segments.add(
+        _EmotionSegment(
+          type: plan.type,
+          asset: asset,
+          startMs: startMs,
+          endMs: endMs,
+        ),
+      );
+    }
+
+    if (segments.isEmpty) {
+      _pendingEmotionSegments = [];
+      _emotionSegmentsScheduled = true;
+      return;
+    }
+
+    segments.sort((a, b) => a.startMs.compareTo(b.startMs));
+    _pendingEmotionSegments = segments;
+    _emotionSegmentsScheduled = true;
+    _updateEmotionState(_lastKnownAudioPositionMs);
+  }
+
+  void _updateEmotionState(int posMs) {
+    if (!_emotionSegmentsScheduled) {
+      return;
+    }
+
+    if (_currentEmotionSegment != null &&
+        posMs >= _currentEmotionSegment!.endMs) {
+      _completeActiveEmotionSegment();
+    }
+
+    if (_isEmotionActive) {
+      return;
+    }
+
+    if (_pendingEmotionSegments.isEmpty) {
+      return;
+    }
+
+    for (final segment in _pendingEmotionSegments) {
+      if (segment.completed || segment.inProgress) {
+        continue;
+      }
+      if (posMs > segment.endMs + _emotionGraceMs) {
+        segment.completed = true;
+      }
+    }
+
+    if (_delayedEmotionSegment != null) {
+      final delayed = _delayedEmotionSegment!;
+      if (delayed.completed) {
+        _delayedEmotionSegment = null;
+      } else if (posMs > delayed.endMs + _emotionGraceMs) {
+        delayed.completed = true;
+        _delayedEmotionSegment = null;
+      } else if (!_isEyeBlinking) {
+        _delayedEmotionSegment = null;
+        _activateEmotionSegment(delayed);
+        return;
+      } else {
+        return;
+      }
+    }
+
+    for (final segment in _pendingEmotionSegments) {
+      if (segment.completed || segment.inProgress) {
+        continue;
+      }
+      if (posMs < segment.startMs) {
+        break;
+      }
+      if (posMs > segment.endMs + _emotionGraceMs) {
+        segment.completed = true;
+        continue;
+      }
+      if (_isEyeBlinking) {
+        _delayedEmotionSegment = segment;
+        return;
+      }
+      _activateEmotionSegment(segment);
+      return;
+    }
+  }
+
+  void _activateEmotionSegment(_EmotionSegment segment) {
+    if (!_canRenderEyeAsset) {
+      segment.completed = true;
+      return;
+    }
+    _isEmotionActive = true;
+    segment.inProgress = true;
+    _currentEmotionSegment = segment;
+    _setEyeAsset(segment.asset);
+  }
+
+  void _completeActiveEmotionSegment() {
+    final segment = _currentEmotionSegment;
+    if (segment == null) {
+      return;
+    }
+    segment.inProgress = false;
+    segment.completed = true;
+    _currentEmotionSegment = null;
+    _isEmotionActive = false;
+    if (_canRenderEyeAsset) {
+      _setEyeAsset(_mhEyeNatural);
+    }
+  }
+
+  String? _emotionAssetForType(EmotionType type) {
+    switch (type) {
+      case EmotionType.worry:
+        return _mhEyeWorry;
+      case EmotionType.surprise:
+        return _mhEyeSurprised;
+      case EmotionType.moved:
+        return _mhEyeMoved;
+    }
   }
 
 /*
@@ -825,9 +1364,12 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     _ttsCompletionSubscription?.cancel();
     _ttsStateSubscription?.cancel();
     _ttsPositionSubscription?.cancel();
+    _ttsDurationSubscription?.cancel();
     _cancelPositionPoller();
     _ttsAudioPlayer?.dispose();
     _visemeService?.dispose();
+    _stopEyeBlinkLoop();
+    _clearEmotionScheduling();
     super.dispose();
   }
 
@@ -837,4 +1379,32 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
     // ...existing code...
   }
 */
+}
+
+class _EmotionPlan {
+  const _EmotionPlan({
+    required this.type,
+    required this.startRatio,
+    required this.endRatio,
+  });
+
+  final EmotionType type;
+  final double startRatio;
+  final double endRatio;
+}
+
+class _EmotionSegment {
+  _EmotionSegment({
+    required this.type,
+    required this.asset,
+    required this.startMs,
+    required this.endMs,
+  });
+
+  final EmotionType type;
+  final String asset;
+  final int startMs;
+  final int endMs;
+  bool inProgress = false;
+  bool completed = false;
 }

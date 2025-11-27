@@ -14,6 +14,12 @@
 ## [최근 업데이트 내역]
 
 
+### 2025-11-28
+- `story_reading_screen.dart`에서 `VisemeEventService`를 `initState` 단계에서 생성하도록 수정해 TTS 실행 전에 WebSocket 연결이 보장되도록 조정
+- `.env` 기반 `VISEME_WEBSOCKET_URL`/`VISEME_SOCKET_URL` 값을 우선 활용하고, 미설정 시 데스크톱은 `ws://127.0.0.1:8000/ws/tts`, 안드로이드 에뮬레이터는 `ws://10.0.2.2:8000/ws/tts`로 자동 fallback 하도록 구현
+- 초기화/URL 결정 과정을 디버그 로그로 남기도록 해 viseme 이벤트 수신 문제 재발 시 진단이 용이하도록 개선
+- 남성 캐릭터 선택 시 눈 깜박임 루프를 실행하고 감정 이벤트가 들어오면 눈 표정을 교체/복구하도록 `_startEyeBlinkLoop()`, `_setEyeAsset()` 등 로직 정리, 감정 애니메이션과 블링크가 충돌하지 않도록 타이머 관리 개선
+
 ### 2025-11-27
 - Flutter 앱에서 viseme 큐가 비어 있는 문제 재현 후 서버/클라이언트 로그 수집
 - FastAPI `tts_server.py`의 viseme 전송 로직을 Future 집합과 락으로 보호하도록 재작성하여 WebSocket 종료 이후에도 이벤트가 누락되지 않도록 수정
