@@ -53,6 +53,7 @@ flutter:
   
   assets:
     - assets/images/
+    - assets/images/MH_eye/
     - assets/txt/
     - assets/audio/
     - assets/voice_config.json

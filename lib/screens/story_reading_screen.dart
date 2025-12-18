@@ -737,7 +737,79 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
           _scheduleEmotionSegments(duration);
         }
       });
-      final mp3FilePath = await _azureTTSService.generateAudio(
+
+      final voiceName =
+          _azureTTSService.resolveVoiceName(settings.language, settings.gender);
+      final effectiveSpeechRate =
+          _azureTTSService.applySpeechRateMultiplier(settings.speechRate);
+
+      final visemeService = _visemeService;
+      Completer<void>? visemePrimed;
+      bool firstVisemeCaptured = false;
+      void markVisemePrimed() {
+        final completer = visemePrimed;
+        if (completer != null && !completer.isCompleted) {
+          completer.complete();
+        }
+      }
+
+      if (visemeService != null) {
+        visemePrimed = Completer<void>();
+        await _visemeStreamSubscription?.cancel();
+        _visemeStreamSubscription = visemeService.events.listen((event) {
+          switch (event['type']) {
+            case 'viseme':
+              final rawViseme = (event['viseme_id'] as num?)?.toInt() ?? 0;
+              final mappedViseme = visemeFileMap.containsKey(rawViseme)
+                  ? rawViseme
+                  : (_azureVisemeToUniversal[rawViseme] ?? 0);
+              debugPrint(
+                '[VisemeQueue] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
+              );
+              _visemeQueue.add({
+                'viseme_id': mappedViseme,
+                'audio_offset_ms': event['audio_offset_ms'] ?? 0,
+                'raw_viseme_id': rawViseme,
+              });
+              if (!visemeFileMap.containsKey(rawViseme) &&
+                  !_azureVisemeToUniversal.containsKey(rawViseme)) {
+                debugPrint(
+                    'Unknown viseme id $rawViseme received. Defaulting to neutral.');
+              }
+              debugPrint(
+                '[Viseme] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
+              );
+              if (!firstVisemeCaptured) {
+                firstVisemeCaptured = true;
+                markVisemePrimed();
+              }
+              break;
+            case 'done':
+              markVisemePrimed();
+              break;
+            case 'error':
+              markVisemePrimed();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content:
+                      Text('TTS 오류: ${event['message'] ?? event['error']}'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              break;
+            default:
+              break;
+          }
+        });
+
+        visemeService.sendTTSRequest(
+          text: ttsText,
+          voice: voiceName,
+          speakingRate: effectiveSpeechRate,
+        );
+      }
+
+      final mp3FilePathFuture = _azureTTSService.generateAudio(
         text: ttsText,
         language: settings.language,
         characterGender: settings.gender,
@@ -745,6 +817,8 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
         pitch: settings.pitch,
         age: settings.age,
       );
+
+      final mp3FilePath = await mp3FilePathFuture;
 
       try {
         final file = File(mp3FilePath);
@@ -754,51 +828,14 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       } catch (err) {
         debugPrint('[TTS Playback] file stat failed: $err');
       }
-      final visemeService = _visemeService;
-      if (visemeService != null) {
-        await _visemeStreamSubscription?.cancel();
-        _visemeStreamSubscription = visemeService.events.listen((event) {
-          if (event['type'] == 'viseme') {
-            final rawViseme = (event['viseme_id'] as num?)?.toInt() ?? 0;
-            final mappedViseme = visemeFileMap.containsKey(rawViseme)
-                ? rawViseme
-                : (_azureVisemeToUniversal[rawViseme] ?? 0);
-            debugPrint(
-              '[VisemeQueue] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
-            );
-            _visemeQueue.add({
-              'viseme_id': mappedViseme,
-              'audio_offset_ms': event['audio_offset_ms'] ?? 0,
-              'raw_viseme_id': rawViseme,
-            });
-            if (!visemeFileMap.containsKey(rawViseme) &&
-                !_azureVisemeToUniversal.containsKey(rawViseme)) {
-              debugPrint(
-                  'Unknown viseme id $rawViseme received. Defaulting to neutral.');
-            }
-            debugPrint(
-              '[Viseme] raw=$rawViseme mapped=$mappedViseme offset=${event['audio_offset_ms']}',
-            );
-          } else if (event['type'] == 'error') {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content:
-                    Text('TTS 오류: ${event['message'] ?? event['error']}'),
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          }
-        });
 
-        final voiceName =
-            _azureTTSService.resolveVoiceName(settings.language, settings.gender);
-        final effectiveSpeechRate =
-            _azureTTSService.applySpeechRateMultiplier(settings.speechRate);
-        visemeService.sendTTSRequest(
-          text: ttsText,
-          voice: voiceName,
-          speakingRate: effectiveSpeechRate,
-        );
+      if (visemePrimed != null) {
+        try {
+          await visemePrimed.future
+              .timeout(const Duration(milliseconds: 750));
+        } catch (_) {
+          debugPrint('[VisemeQueue] priming timed out before playback');
+        }
       }
 
       await audioPlayer.play(DeviceFileSource(mp3FilePath));
@@ -1151,6 +1188,16 @@ class _StoryReadingScreenState extends State<StoryReadingScreen> {
       }
       processedChars += sentenceChars;
     }
+
+    const double endingStartRatio = 0.9;
+    const double endingEndRatio = 1.0;
+    plans.add(
+      const _EmotionPlan(
+        type: EmotionType.moved,
+        startRatio: endingStartRatio,
+        endRatio: endingEndRatio,
+      ),
+    );
     return plans;
   }
 
