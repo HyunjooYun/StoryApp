@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "default": {
+    "xmlLang": "ko-KR",
+    "rate": "0.25",
+    "pitch": "0%",
+    "style": "general",
+    "model": {
+      "male": "ko-KR-HyunsuNeural",
+      "female": "ko-KR-SeoHyeonNeural"
+    },
+    "flutterTts": {
+      "rate": 0.05,
+      "pitch": 0.14,
+      "pauseMs": 1800
+    }
+  },
+  "languages": {
+    "한국어": {
+      "xmlLang": "ko-KR",
+      "ageRules": [
+        {
+          "max": 4,
+          "rate": "0.85",
+          "pitch": "+10%",
+          "style": "cheerful",
+          "model": { "male": "ko-KR-HyunsuNeural", "female": "ko-KR-SeoHyeonNeural" },
+          "flutterTts": { "rate": 0.01, "pitch": 0.04, "pauseMs": 1800 }
+        },
+        {
+          "max": 7,
+          "rate": "0.90",
+          "pitch": "+5%",
+          "style": "gentle",
+          "model": { "male": "ko-KR-HyunsuNeural", "female": "ko-KR-SeoHyeonNeural" },
+          "flutterTts": { "rate": 0.08, "pitch": 1.0, "pauseMs": 1800 }
+        },
+        {
+          "max": 11,
+          "rate": "1.0",
+          "pitch": "0%",
+          "style": "calm",
+          "model": { "male": "ko-KR-HyunsuNeural", "female": "ko-KR-SeoHyeonNeural" },
+          "flutterTts": { "rate": 0.15, "pitch": 0.4, "pauseMs": 1800 }
+        }
+      ]
+    },
+    "영어": {
+      "xmlLang": "en-US",
+      "ageRules": [
+        {
+          "max": 6,
+          "rate": "0.85",
+          "pitch": "+8%",
+          "style": "cheerful",
+          "model": { "male": "en-US-EricNeural", "female": "en-US-JennyNeural" },
+          "flutterTts": { "rate": 0.5, "pitch": 1.1 }
+        },
+        {
+          "max": 200,
+          "rate": "1.0",
+          "pitch": "+3%",
+          "style": "friendly",
+          "model": { "male": "en-US-RyanMultilingualNeural", "female": "en-US-JennyNeural" },
+          "flutterTts": { "rate": 0.7, "pitch": 1.0 }
+        }
+      ]
+    },
+    "일본어": {
+      "xmlLang": "ja-JP",
+      "ageRules": [
+        {
+          "max": 4,
+          "rate": "0.85",
+          "pitch": "+10%",
+          "style": "cheerful",
+          "model": { "male": "ja-JP-NaokiNeural", "female": "ja-JP-AoiNeural" },
+          "flutterTts": { "rate": 0.45, "pitch": 1.1 }
+        },
+        {
+          "max": 7,
+          "rate": "1.0",
+          "pitch": "+5%",
+          "style": "gentle",
+          "model": { "male": "ja-JP-KeitaNeural", "female": "ja-JP-AoiNeural" },
+          "flutterTts": { "rate": 0.6, "pitch": 1.0 }
+        },
+        {
+          "max": 200,
+          "rate": "1.0",
+          "pitch": "0%",
+          "style": "calm",
+          "model": { "male": "ja-JP-KeitaNeural", "female": "ja-JP-AoiNeural" },
+          "flutterTts": { "rate": 0.75, "pitch": 0.95 }
+        }
+      ]
+    },
+    "중국어": {
+      "xmlLang": "zh-CN",
+      "ageRules": [
+        {
+          "max": 6,
+          "rate": "0.85",
+          "pitch": "+8%",
+          "style": "cheerful",
+          "model": { "male": "zh-CN-YunxiNeural", "female": "zh-CN-XiaoxiaoNeural" },
+          "flutterTts": { "rate": 0.5, "pitch": 1.05 }
+        },
+        {
+          "max": 200,
+          "rate": "1.0",
+          "pitch": "+3%",
+          "style": "gentle",
+          "model": { "male": "zh-CN-YunyeNeural", "female": "zh-CN-XiaoxiaoNeural" },
+          "flutterTts": { "rate": 0.7, "pitch": 1.0 }
+        }
+      ]
+    },
+    "베트남어": {
+      "xmlLang": "vi-VN",
+      "ageRules": [
+        {
+          "max": 200,
+          "rate": "0.85",
+          "pitch": "0%",
+          "style": "gentle",
+          "model": { "male": "vi-VN-NamMinhNeural", "female": "vi-VN-HoaiMyNeural" },
+          "flutterTts": { "rate": 0.6, "pitch": 1.0 }
+        }
+      ]
+    },
+    "독일어": {
+      "xmlLang": "de-DE",
+      "ageRules": [
+        {
+          "max": 200,
+          "rate": "1.0",
+          "pitch": "0%",
+          "style": "general",
+          "model": { "male": "de-DE-ConradNeural", "female": "de-DE-GiselaNeural" },
+          "flutterTts": { "rate": 0.7, "pitch": 1.0 }
+        }
+      ]
+    }
+  }
+}
